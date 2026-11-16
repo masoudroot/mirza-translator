@@ -78,5 +78,5 @@
 - `options.html` / `options.js` — تنظیمات، گرفتن مدل‌ها و آزمایش اتصال
 - `translator.css` — نوار پیشرفت و پیام
 - `version.json` — نسخه تازه و فهرست فایل‌های به‌روزرسانی
-- `updater/` — میزبان به‌روزرسان (host.ps1، host-launcher.bat، install-host.bat)
+- `updater/` — میزبان به‌روزرسان (host.ps1، host-launcher.bat، install-host.bat، install-host.ps1)
 - `icons/` — آیکون‌ها
