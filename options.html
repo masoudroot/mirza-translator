@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+<head>
+<meta charset="utf-8">
+<title>تنظیمات مترجم میرزا</title>
+<style>
+  body { margin: 0; padding: 24px; font-family: Tahoma, sans-serif; background: #F6F2E8; color: #1d1d1d; max-width: 560px; }
+  h1 { font-size: 20px; color: #104C46; margin: 0 0 4px; }
+  .sub { font-size: 13px; color: #555; line-height: 1.9; margin-bottom: 20px; }
+  label { display: block; font-size: 13px; font-weight: bold; margin: 16px 0 6px; }
+  input[type="text"], input[type="password"] { width: 100%; box-sizing: border-box; padding: 10px; font-size: 14px; border: 1px solid #ccc; border-radius: 8px; background: #fff; direction: ltr; text-align: left; font-family: Tahoma, sans-serif; }
+  .presets { display: flex; gap: 8px; margin-top: 6px; }
+  .preset { flex: 1; padding: 10px 6px; font-family: Tahoma, sans-serif; font-size: 13px; border: 1px solid #104C46; border-radius: 8px; background: #fff; color: #104C46; cursor: pointer; }
+  .preset.active { background: #104C46; color: #fff; }
+  .hint { font-size: 12px; color: #777; line-height: 1.8; margin-top: 4px; }
+  .row { display: flex; gap: 8px; margin-top: 8px; }
+  button { padding: 10px 16px; font-family: Tahoma, sans-serif; font-size: 14px; border: none; border-radius: 8px; cursor: pointer; }
+  button:disabled { opacity: 0.55; cursor: default; }
+  #fetchBtn { background: #fff; border: 1px solid #104C46; color: #104C46; }
+  #saveBtn { background: #104C46; color: #fff; }
+  #testBtn { background: #C49A4A; color: #fff; }
+  #hostTestBtn { background: #fff; border: 1px solid #104C46; color: #104C46; }
+  #message { margin-top: 16px; font-size: 13px; line-height: 1.9; min-height: 22px; }
+  #message.ok { color: #104C46; }
+  #message.err { color: #a33; }
+  .note { margin-top: 24px; padding: 12px; background: #fff; border-radius: 8px; font-size: 12px; line-height: 2; color: #555; }
+</style>
+</head>
+<body>
+  <h1>تنظیمات مترجم میرزا</h1>
+  <div class="sub">مدل هوش مصنوعی را خودت وصل می‌کنی؛ آدرس پایه و کلید را بده، مدل‌ها را بگیر و یکی را انتخاب کن. همه‌چیز فقط در همین مرورگر می‌ماند.</div>
+
+  <label>درگاه</label>
+  <div class="presets">
+    <button type="button" class="preset" data-provider="dotdotagent">dotdotagent</button>
+    <button type="button" class="preset" data-provider="reformboss">ReformBoss / iishko</button>
+    <button type="button" class="preset" data-provider="custom">سفارشی</button>
+  </div>
+
+  <label for="baseUrl">آدرس پایه (Base URL)</label>
+  <input type="text" id="baseUrl" placeholder="https://api.samp.team/v1" autocomplete="off">
+  <div class="hint">آدرس درگاه سازگار با OpenAI، بدون خط مورب آخر. مثلاً برای dotdotagent همین آدرس بالاست.</div>
+
+  <label for="apiKey">کلید API</label>
+  <input type="password" id="apiKey" placeholder="کلید را اینجا بگذار" autocomplete="off">
+  <div class="hint">کلید فقط در حافظه همین مرورگر ذخیره می‌شود و فقط به همین آدرس فرستاده می‌شود.</div>
+
+  <label for="modelInput">مدل</label>
+  <input type="text" id="modelInput" list="modelList" placeholder="اول دکمه «گرفتن مدل‌ها» را بزن" autocomplete="off">
+  <datalist id="modelList"></datalist>
+  <div class="row">
+    <button type="button" id="fetchBtn">گرفتن مدل‌ها</button>
+  </div>
+  <div class="hint">اگر درگاهت فهرست مدل نداد، نام مدل را دستی در همین کادر بنویس.</div>
+
+  <div class="row" style="margin-top: 20px;">
+    <button type="button" id="saveBtn">ذخیره تنظیمات</button>
+    <button type="button" id="testBtn">آزمایش اتصال</button>
+  </div>
+
+  <div id="message"></div>
+
+  <label>میزبان به‌روزرسان</label>
+  <div class="row">
+    <button type="button" id="hostTestBtn">آزمایش میزبان</button>
+  </div>
+  <div class="hint">میزبان، برنامه کوچکی است که دکمه به‌روزرسانی را کار می‌اندازد. اگر نصب نیست، یک بار فایل install-host.bat را از پوشه افزونه اجرا کن.</div>
+  <div id="hostMessage" style="margin-top: 8px; font-size: 13px; line-height: 1.9;"></div>
+
+  <div class="note">چطور کار می‌کند؟ روی هر صفحه‌ای آیکون افزونه را بزن و «ترجمه صفحه» را انتخاب کن. متن اصلی مقاله اول ترجمه می‌شود و هر بخش که آماده شد همان لحظه سر جایش می‌نشیند؛ لازم نیست تا آخر صبر کنی. با زدن دوباره همان دکمه، صفحه به انگلیسی برمی‌گردد. کدها و دکمه‌های صفحه ترجمه نمی‌شوند تا صفحه خراب نشود.</div>
+
+  <script src="options.js"></script>
+</body>
+</html>

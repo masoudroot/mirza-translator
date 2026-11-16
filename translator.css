@@ -1,0 +1,74 @@
+/* translator.css — نوار پیشرفت و پیام مترجم میرزا */
+
+#mirza-progress {
+  position: fixed;
+  bottom: 18px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 2147483647;
+  background: #104C46;
+  color: #fff;
+  border-radius: 12px;
+  padding: 10px 14px;
+  font-family: Tahoma, sans-serif;
+  font-size: 13px;
+  direction: rtl;
+  box-shadow: 0 4px 18px rgba(0, 0, 0, 0.3);
+  min-width: 280px;
+  max-width: 90vw;
+}
+
+#mirza-progress .mirza-progress-inner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+#mirza-progress .mirza-progress-text {
+  white-space: nowrap;
+}
+
+#mirza-progress .mirza-progress-track {
+  flex: 1;
+  height: 6px;
+  background: rgba(255, 255, 255, 0.25);
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+#mirza-progress .mirza-progress-fill {
+  height: 100%;
+  width: 0;
+  background: #C49A4A;
+  border-radius: 3px;
+  transition: width 0.3s ease;
+}
+
+#mirza-progress .mirza-progress-cancel {
+  background: transparent;
+  border: 1px solid rgba(255, 255, 255, 0.6);
+  color: #fff;
+  border-radius: 6px;
+  padding: 3px 10px;
+  font-family: Tahoma, sans-serif;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+#mirza-toast {
+  position: fixed;
+  bottom: 18px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 2147483647;
+  background: #222;
+  color: #fff;
+  border-radius: 10px;
+  padding: 10px 16px;
+  font-family: Tahoma, sans-serif;
+  font-size: 13px;
+  direction: rtl;
+  box-shadow: 0 4px 18px rgba(0, 0, 0, 0.3);
+  max-width: 90vw;
+  text-align: center;
+}

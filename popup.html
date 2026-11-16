@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+<head>
+<meta charset="utf-8">
+<style>
+  body { width: 280px; margin: 0; padding: 16px; font-family: Tahoma, sans-serif; background: #F6F2E8; color: #1d1d1d; }
+  h1 { font-size: 16px; margin: 0 0 4px; color: #104C46; }
+  p { font-size: 12px; line-height: 1.9; margin: 0 0 12px; color: #555; }
+  #status { font-size: 12px; margin-bottom: 12px; color: #555; }
+  button { width: 100%; padding: 10px; font-family: Tahoma, sans-serif; font-size: 14px; border: none; border-radius: 8px; cursor: pointer; }
+  #translateBtn { background: #104C46; color: #fff; }
+  #translateBtn:hover { background: #0b3833; }
+  #translateBtn:disabled { background: #999; cursor: default; }
+  #updateBox { margin-top: 12px; padding-top: 12px; border-top: 1px solid #ddd; }
+  #updateStatus { font-size: 12px; color: #555; line-height: 1.8; margin-bottom: 8px; }
+  #updateBtn { background: #C49A4A; color: #fff; }
+  #updateBtn:hover { background: #a8832f; }
+  #updateBtn:disabled { background: #999; cursor: default; }
+  a { font-size: 12px; color: #104C46; text-decoration: none; cursor: pointer; }
+  a:hover { text-decoration: underline; }
+  #error { font-size: 12px; color: #a33; line-height: 1.8; margin-top: 10px; display: none; }
+</style>
+</head>
+<body>
+  <h1>مترجم میرزا</h1>
+  <p>متن همین صفحه را روان و ساده فارسی می‌کند؛ ساختار صفحه دست نمی‌خورد.</p>
+  <div id="status">…</div>
+  <button id="translateBtn" type="button">ترجمه صفحه</button>
+  <div id="updateBox">
+    <div id="updateStatus">در حال بررسی به‌روزرسانی…</div>
+    <button id="updateBtn" type="button" style="display:none;">به‌روزرسانی</button>
+  </div>
+  <div class="row">
+    <a id="optionsLink">تنظیمات و کلید API</a>
+  </div>
+  <div id="error"></div>
+  <script src="popup.js"></script>
+</body>
+</html>
