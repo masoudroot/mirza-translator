@@ -9,6 +9,10 @@
 (function () {
   'use strict';
 
+  // اگر اسکریپت دو بار تزریق شد (مثلاً پاپ‌آپ هم تزریق کرد)، دومی کاری نمی‌کند.
+  if (window.__mirzaTranslatorLoaded) return;
+  window.__mirzaTranslatorLoaded = true;
+
   var SKIP_TAGS = {
     SCRIPT: 1, STYLE: 1, NOSCRIPT: 1, TEXTAREA: 1, SELECT: 1, OPTION: 1,
     INPUT: 1, CODE: 1, PRE: 1, KBD: 1, SAMP: 1, VAR: 1, IFRAME: 1,
@@ -387,6 +391,10 @@
     });
   }
 
+  function isStale() {
+    try { return !chrome.runtime || !chrome.runtime.id; } catch (_e) { return true; }
+  }
+
   // ---------- جریان اصلی ----------
 
   async function translatePage() {
@@ -395,8 +403,12 @@
 
     var settings = await getSettings();
     if (!settings || !settings.apiKey) {
-      showToast('کلید API را در تنظیمات افزونه بگذار؛ بعد دوباره بزن.');
-      try { chrome.runtime.sendMessage({ type: 'mirza-open-options' }); } catch (_e) {}
+      if (isStale()) {
+        showToast('افزونه به‌روز شد؛ این صفحه را یک بار تازه کن.');
+      } else {
+        showToast('کلید API را در تنظیمات افزونه بگذار؛ بعد دوباره بزن.');
+        try { chrome.runtime.sendMessage({ type: 'mirza-open-options' }); } catch (_e) {}
+      }
       return;
     }
 
@@ -507,7 +519,15 @@
       translatePage();
       sendResponse({ ok: true, state: state });
     } else if (msg.type === 'mirza-status') {
-      sendResponse({ ok: true, state: state });
+      // اگر زمینه افزونه مرده باشد (زبانه پیش از به‌روزرسانی باز شده)،
+      // getManifest خطا می‌دهد. در این حالت اصلاً جواب نمی‌دهیم تا پاپ‌آپ
+      // اسکریپت تازه را تزریق کند و جواب او برسد؛ وگرنه جواب کهنه همیشه
+      // زودتر می‌رسد و جلوی تازه را می‌گیرد.
+      try {
+        sendResponse({ ok: true, state: state, version: chrome.runtime.getManifest().version });
+      } catch (_e) {
+        // عمداً بدون sendResponse
+      }
     }
     return false;
   });

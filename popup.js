@@ -3,6 +3,7 @@
 var btn = document.getElementById('translateBtn');
 var statusEl = document.getElementById('status');
 var errorEl = document.getElementById('error');
+var tabId = null;
 
 try {
   document.getElementById('verBadge').textContent = 'نسخه ' + chrome.runtime.getManifest().version;
@@ -28,34 +29,97 @@ function showError(text) {
   errorEl.textContent = text;
 }
 
-chrome.tabs.query({ active: true, currentWindow: true }, function (tabs) {
-  if (!tabs || !tabs[0]) { showError('زبانه‌ای پیدا نشد.'); return; }
-  var tabId = tabs[0].id;
+function showCannotTranslate() {
+  statusEl.textContent = 'در این صفحه نمی‌شود ترجمه کرد (مثل صفحه داخلی کروم).';
+  btn.disabled = true;
+}
+
+// اسکریپت ترجمه فقط موقع باز شدن صفحه تزریق می‌شود؛ پس زبانه‌ای که پیش از
+// نصب یا به‌روزرسانی افزونه باز شده، اسکریپت را ندارد. این‌جا خودش تزریق می‌شود
+// و دیگر لازم نیست صفحه را تازه کنی.
+function injectContentScript(cb) {
+  chrome.scripting.executeScript({ target: { tabId: tabId }, files: ['content.js'] }, function () {
+    if (chrome.runtime.lastError) { cb(false); return; }
+    chrome.scripting.insertCSS({ target: { tabId: tabId }, files: ['translator.css'] }, function () {
+      cb(!chrome.runtime.lastError);
+    });
+  });
+}
+
+// پرچم محافظ دو بار تزریق را پاک می‌کند تا اسکریپت تازه جای کهنه بنشیند.
+function clearStaleFlag(cb) {
+  chrome.scripting.executeScript({
+    target: { tabId: tabId },
+    func: function () { try { delete window.__mirzaTranslatorLoaded; } catch (_e) {} }
+  }, function () { cb(!chrome.runtime.lastError); });
+}
+
+// وضعیت را می‌پرسد؛ اگر اسکریپت نیست یا کهنه است، تزریق می‌کند و دوباره می‌پرسد.
+// done: تابع اختیاری که true/false می‌گیرد.
+function queryStatus(done, staleRetried) {
   chrome.tabs.sendMessage(tabId, { type: 'mirza-status' }, function (res) {
     if (chrome.runtime.lastError || !res) {
-      statusEl.textContent = 'در این صفحه نمی‌شود ترجمه کرد (مثل صفحه داخلی کروم).';
-      btn.disabled = true;
+      injectContentScript(function (ok) {
+        if (!ok) { showCannotTranslate(); if (done) done(false); return; }
+        queryStatusAfterInject(done, staleRetried);
+      });
       return;
     }
+    if (res.error === 'stale') { handleStale(done, staleRetried); return; }
     setStatus(res.state);
+    if (done) done(true);
   });
+}
+
+function queryStatusAfterInject(done, staleRetried) {
+  chrome.tabs.sendMessage(tabId, { type: 'mirza-status' }, function (res) {
+    if (chrome.runtime.lastError || !res) { showCannotTranslate(); if (done) done(false); return; }
+    if (res.error === 'stale') { handleStale(done, staleRetried); return; }
+    setStatus(res.state);
+    if (done) done(true);
+  });
+}
+
+function handleStale(done, staleRetried) {
+  if (staleRetried) {
+    statusEl.textContent = 'افزونه به‌روز شد؛ این صفحه را یک بار تازه کن.';
+    btn.disabled = true;
+    if (done) done(false);
+    return;
+  }
+  clearStaleFlag(function () {
+    injectContentScript(function (ok) {
+      if (!ok) { showCannotTranslate(); if (done) done(false); return; }
+      queryStatusAfterInject(done, true);
+    });
+  });
+}
+
+chrome.tabs.query({ active: true, currentWindow: true }, function (tabs) {
+  if (!tabs || !tabs[0]) { showError('زبانه‌ای پیدا نشد.'); return; }
+  tabId = tabs[0].id;
+  queryStatus();
 
   btn.addEventListener('click', function () {
     errorEl.style.display = 'none';
-    chrome.tabs.sendMessage(tabId, { type: 'mirza-translate' }, function (res) {
-      if (chrome.runtime.lastError || !res) {
-        showError('به صفحه وصل نشدم؛ صفحه را تازه کن و دوباره بزن.');
-        return;
-      }
-      setTimeout(function () {
-        chrome.tabs.sendMessage(tabId, { type: 'mirza-status' }, function (r) {
-          if (r) setStatus(r.state);
-          btn.disabled = false;
-        });
-      }, 600);
+    // پیش از فرستادن دستور، مطمئن می‌شویم اسکریپت در زبانه هست
+    queryStatus(function (ok) {
+      if (!ok) { btn.disabled = false; return; }
+      chrome.tabs.sendMessage(tabId, { type: 'mirza-translate' }, function (res) {
+        if (chrome.runtime.lastError || !res) {
+          showError('به صفحه وصل نشدم؛ صفحه را تازه کن و دوباره بزن.');
+          return;
+        }
+        setTimeout(function () {
+          chrome.tabs.sendMessage(tabId, { type: 'mirza-status' }, function (r) {
+            if (r && !r.error) setStatus(r.state);
+            btn.disabled = false;
+          });
+        }, 600);
+      });
+      btn.disabled = true;
+      btn.textContent = '…';
     });
-    btn.disabled = true;
-    btn.textContent = '…';
   });
 });
 
