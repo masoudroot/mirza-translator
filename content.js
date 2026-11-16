@@ -100,9 +100,9 @@
           if (!parent) return NodeFilter.FILTER_REJECT;
           if (SKIP_TAGS[parent.tagName]) return NodeFilter.FILTER_REJECT;
           if (parent.closest('[hidden], [aria-hidden="true"]')) return NodeFilter.FILTER_REJECT;
-          // متن‌های خود افزونه (پیام، نوار پیشرفت، دکمه مبتدی) ترجمه نمی‌شوند؛
-          // وگرنه دیده‌بان آن‌ها را هم می‌فرستاد و برچسب دکمه عوض می‌شد.
-          if (parent.closest('#mirza-progress, #mirza-toast, #mirza-beginner-btn')) return NodeFilter.FILTER_REJECT;
+          // متن‌های خود افزونه (پیام، نوار پیشرفت) ترجمه نمی‌شوند؛
+          // وگرنه دیده‌بان آن‌ها را هم می‌فرستاد.
+          if (parent.closest('#mirza-progress, #mirza-toast')) return NodeFilter.FILTER_REJECT;
           if (!isTranslatableText(node.nodeValue)) return NodeFilter.FILTER_REJECT;
           // دیده شدن ملاک نیست: بخش پنهان با CSS (زبانه، آکاردئون) هم ترجمه می‌شود
           // تا وقتی باز شد فارسی باشد.
@@ -201,7 +201,8 @@
       var original = node.nodeValue;
       var m = original.match(/^(\s*)([\s\S]*?)(\s*)$/);
       var replaced = (m ? m[1] : '') + translated + (m ? m[3] : '');
-      translatedNodes.push({ node: node, original: original });
+      // standard را نگه می‌داریم تا «بازگشت به ترجمه معمولی» بدون درخواست تازه کار کند
+      translatedNodes.push({ node: node, original: original, standard: translated });
       node.nodeValue = replaced;
     });
   }
@@ -271,7 +272,6 @@
       removeProgressBar();
       if (currentRunKind === 'simplify') {
         currentRunKind = null;
-        showBeginnerButton();
         showToast('ساده‌سازی لغو شد؛ ترجمه سر جایش ماند.');
       } else {
         currentRunKind = null;
@@ -306,26 +306,6 @@
     toast.textContent = text;
     document.body.appendChild(toast);
     setTimeout(function () { if (toast.isConnected) toast.remove(); }, 5000);
-  }
-
-  // دکمه «ترجمه برای مبتدی» بعد از پایان ترجمه می‌آید و تا برگشت به انگلیسی
-  // یا ترجمه تازه می‌ماند؛ بالاتر از پیام می‌نشیند تا روی هم نیفتند.
-  function showBeginnerButton() {
-    if (state !== 'translated') return;
-    if (!translatedNodes.length) return;
-    if (beginnerDone) return;
-    if (document.getElementById('mirza-beginner-btn')) return;
-    var btn = document.createElement('button');
-    btn.id = 'mirza-beginner-btn';
-    btn.type = 'button';
-    btn.textContent = 'ترجمه برای مبتدی';
-    btn.addEventListener('click', function () { simplifyForBeginner(); });
-    document.body.appendChild(btn);
-  }
-
-  function hideBeginnerButton() {
-    var btn = document.getElementById('mirza-beginner-btn');
-    if (btn) btn.remove();
   }
 
   // ---------- حرف زدن با پس‌زمینه ----------
@@ -364,10 +344,11 @@
   // هم خراب شد، همان نیمه تک‌تک می‌رود. خطای کشنده (مدل خاموش، کلید
   // اشتباه) همان‌جا کل ترجمه را می‌ایستاند تا درخواست بیهوده نرود.
   // خروجی آرایه‌ای هم‌طول ورودی است؛ جای رشته‌های ناموفق null می‌ماند.
-  // حالت مبتدی کش جدا دارد (کلید 'b' + هش) تا ترجمه ساده جای ترجمه معمولی را
-  // نگیرد و برعکس؛ ورودی‌اش متن انگلیسی اصلی است، خروجی‌اش فارسی ساده.
+  // حالت مبتدی کش جدا دارد (کلید 's' + هش ورودی فارسی) تا ترجمه ساده جای
+  // ترجمه معمولی را نگیرد و برعکس؛ ورودی‌اش فارسی جاری روی صفحه است،
+  // خروجی‌اش فارسی ساده‌تر. ('b' مال نسخه ۱٫۶٫۰ بود که ورودی‌اش انگلیسی بود.)
   function cacheKey(text, mode) {
-    return mode === 'beginner' ? 'b' + hashText(text) : hashText(text);
+    return mode === 'beginner' ? 's' + hashText(text) : hashText(text);
   }
 
   async function translateTexts(texts, settings, depth, mode) {
@@ -522,7 +503,6 @@
     var myRun = ++runId;
     currentRunKind = 'translate';
     beginnerDone = false;
-    hideBeginnerButton();
     lastTranslateError = null;
     fatalError = null;
     await loadCache();
@@ -583,12 +563,11 @@
     if (fatalError) {
       // خطای کشنده: یا هیچ‌چیز ترجمه نشده، یا وسط کار متوقف شده؛ پیامش خودش راهنماست.
       state = (translatedNodes.length || translatedAttrs.length) ? 'translated' : 'idle';
-      if (state === 'translated') { startObserver(settings); showBeginnerButton(); }
+      if (state === 'translated') startObserver(settings);
       showToast(fatalError);
     } else if (translatedNodes.length || translatedAttrs.length) {
       state = 'translated';
       startObserver(settings);
-      showBeginnerButton();
       showToast(
         failedTotal > 0
           ? 'ترجمه تمام شد؛ ' + toFaDigits(failedTotal) + ' جمله ترجمه نشد. ' + (lastTranslateError || 'اتصال را بررسی کن و دوباره بزن.')
@@ -602,10 +581,10 @@
 
   // ---------- ساده‌سازی برای مبتدی ----------
 
-  // دکمه «ترجمه برای مبتدی» متن انگلیسی اصلی را دوباره می‌خواند و فارسی
-  // ساده می‌نویسد؛ انگار یک نویسنده ایرانی برای یک مبتدی نوشته است.
-  // جایگذاری فقط روی گره‌های ترجمه‌شده است و اصل انگلیسی سر جایش می‌ماند،
-  // پس برگشت به انگلیسی بعد از ساده‌سازی هم سالم کار می‌کند.
+  // ورودی ساده‌سازی، فارسی جاری روی صفحه است (ترجمه معمولی)، نه انگلیسی؛
+  // مدل همان متن را ساده‌تر می‌نویسد، پس تغییر روی صفحه دیده می‌شود.
+  // ترجمه معمولی هر گره در translatedNodes.standard مانده، پس بازگشت به آن
+  // بدون درخواست تازه انجام می‌شود.
   async function simplifyForBeginner() {
     if (state !== 'translated' || beginnerDone) return;
     var settings = await getSettings();
@@ -617,15 +596,15 @@
     currentRunKind = 'simplify';
     lastTranslateError = null;
     fatalError = null;
-    hideBeginnerButton();
     await loadCache();
 
     var byText = new Map();
     translatedNodes.forEach(function (item) {
-      var trimmed = String(item.original).trim();
-      if (!isTranslatableText(trimmed)) return;
-      if (!byText.has(trimmed)) byText.set(trimmed, { text: trimmed, nodes: [] });
-      byText.get(trimmed).nodes.push(item.node);
+      if (!item.node.isConnected) return;
+      var current = item.node.nodeValue.trim();
+      if (!isTranslatableText(current)) return;
+      if (!byText.has(current)) byText.set(current, { text: current, nodes: [] });
+      byText.get(current).nodes.push(item.node);
     });
     var entries = Array.from(byText.values());
     if (!entries.length) { currentRunKind = null; return; }
@@ -668,26 +647,34 @@
       });
     };
     var r = await runBatches(batches, settings, myRun, applyBeginner, onBatchDone, null, 'beginner');
-    if (myRun !== runId) return; // لغو شده بود؛ دکمه لغو خودش دکمه مبتدی را برگرداند
+    if (myRun !== runId) return; // لغو شده بود
     failedTotal += r.failed;
 
-    // عنوان صفحه هم با همان لحن ساده می‌شود.
-    if (!fatalError && originalTitle !== null) {
-      translateBatchViaBackground([originalTitle.trim()], settings, 'beginner').then(function (res) {
-        if (myRun === runId && res.ok && res.translations && res.translations[0]) {
-          document.title = res.translations[0];
+    // عنوان صفحه هم با همان لحن ساده می‌شود (ورودی‌اش عنوان فارسی جاری است).
+    // عنوان هم کش جدا دارد؛ وگرنه هر بار ساده‌سازی دوباره یک درخواست می‌رود.
+    if (!fatalError) {
+      var currentTitle = document.title.trim();
+      if (currentTitle) {
+        var titleKey = cacheKey(currentTitle, 'beginner');
+        if (cache[titleKey]) {
+          document.title = cache[titleKey];
+        } else {
+          translateBatchViaBackground([currentTitle], settings, 'beginner').then(function (res) {
+            if (myRun === runId && res.ok && res.translations && res.translations[0]) {
+              cache[titleKey] = res.translations[0];
+              document.title = res.translations[0];
+            }
+          });
         }
-      });
+      }
     }
 
     currentRunKind = null;
     saveCache();
     removeProgressBar();
     if (fatalError) {
-      showBeginnerButton();
       showToast(fatalError);
     } else if (failedTotal > 0) {
-      showBeginnerButton();
       showToast('ساده‌سازی ناتمام ماند؛ ' + toFaDigits(failedTotal) + ' جمله ساده نشد. ' + (lastTranslateError || 'دوباره بزن.'));
     } else {
       beginnerDone = true;
@@ -695,11 +682,22 @@
     }
   }
 
+  // بازگشت به ترجمه معمولی: بدون درخواست تازه، از standard ثبت‌شده هر گره.
+  function restoreStandard() {
+    if (state !== 'translated' || !beginnerDone) return;
+    translatedNodes.forEach(function (item) {
+      if (!item.node.isConnected || item.standard === undefined) return;
+      var m = item.node.nodeValue.match(/^(\s*)([\s\S]*?)(\s*)$/);
+      item.node.nodeValue = (m ? m[1] : '') + item.standard + (m ? m[3] : '');
+    });
+    beginnerDone = false;
+    showToast('به ترجمه معمولی برگشت.');
+  }
+
   function restorePage() {
     runId++;
     currentRunKind = null;
     beginnerDone = false;
-    hideBeginnerButton();
     removeProgressBar();
     translatedNodes.forEach(function (item) {
       if (item.node.isConnected) item.node.nodeValue = item.original;
@@ -750,13 +748,19 @@
     if (msg.type === 'mirza-translate') {
       translatePage();
       sendResponse({ ok: true, state: state });
+    } else if (msg.type === 'mirza-simplify') {
+      simplifyForBeginner();
+      sendResponse({ ok: true });
+    } else if (msg.type === 'mirza-restore-standard') {
+      restoreStandard();
+      sendResponse({ ok: true });
     } else if (msg.type === 'mirza-status') {
       // اگر زمینه افزونه مرده باشد (زبانه پیش از به‌روزرسانی باز شده)،
       // getManifest خطا می‌دهد. در این حالت اصلاً جواب نمی‌دهیم تا پاپ‌آپ
       // اسکریپت تازه را تزریق کند و جواب او برسد؛ وگرنه جواب کهنه همیشه
       // زودتر می‌رسد و جلوی تازه را می‌گیرد.
       try {
-        sendResponse({ ok: true, state: state, version: chrome.runtime.getManifest().version, error: fatalError || lastTranslateError });
+        sendResponse({ ok: true, state: state, version: chrome.runtime.getManifest().version, error: fatalError || lastTranslateError, beginner: beginnerDone, simplifying: currentRunKind === 'simplify' });
       } catch (_e) {
         // عمداً بدون sendResponse
       }

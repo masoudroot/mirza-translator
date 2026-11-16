@@ -1,6 +1,8 @@
 // popup.js — پاپ‌آپ مترجم میرزا
 
 var btn = document.getElementById('translateBtn');
+var beginnerBtn = document.getElementById('beginnerBtn');
+var restoreBtn = document.getElementById('restoreBtn');
 var statusEl = document.getElementById('status');
 var errorEl = document.getElementById('error');
 var tabId = null;
@@ -9,18 +11,44 @@ try {
   document.getElementById('verBadge').textContent = 'نسخه ' + chrome.runtime.getManifest().version;
 } catch (_e) {}
 
-function setStatus(state) {
+// وضعیت صفحه و سه دکمه را با هم می‌چیند: ترجمه، ساده برای مبتدی، بازگشت به معمولی.
+function setStatus(res) {
+  var state = (res && res.state) || 'idle';
+  var beginner = !!(res && res.beginner);
+  var simplifying = !!(res && res.simplifying);
   statusEl.classList.toggle('done', state === 'translated');
   if (state === 'translated') {
-    statusEl.textContent = 'این صفحه ترجمه شده است.';
     btn.textContent = 'برگشت به انگلیسی';
+    btn.disabled = false;
+    if (beginner) {
+      statusEl.textContent = 'این صفحه به زبان ساده برای مبتدی ترجمه شده است.';
+      beginnerBtn.style.display = 'none';
+      restoreBtn.style.display = 'block';
+    } else if (simplifying) {
+      statusEl.textContent = 'در حال ساده‌سازی برای مبتدی… پیشرفت را پایین صفحه ببین.';
+      beginnerBtn.style.display = 'block';
+      beginnerBtn.textContent = 'در حال ساده‌سازی…';
+      beginnerBtn.disabled = true;
+      restoreBtn.style.display = 'none';
+    } else {
+      statusEl.textContent = 'این صفحه ترجمه شده است.';
+      beginnerBtn.style.display = 'block';
+      beginnerBtn.textContent = 'ترجمه برای مبتدی';
+      beginnerBtn.disabled = false;
+      restoreBtn.style.display = 'none';
+    }
   } else if (state === 'translating') {
     statusEl.textContent = 'در حال ترجمه… پیشرفت را پایین صفحه ببین.';
     btn.textContent = 'در حال ترجمه…';
     btn.disabled = true;
+    beginnerBtn.style.display = 'none';
+    restoreBtn.style.display = 'none';
   } else {
     statusEl.textContent = 'این صفحه هنوز ترجمه نشده است.';
     btn.textContent = 'ترجمه صفحه';
+    btn.disabled = false;
+    beginnerBtn.style.display = 'none';
+    restoreBtn.style.display = 'none';
   }
 }
 
@@ -66,7 +94,7 @@ function queryStatus(done, staleRetried) {
       return;
     }
     if (res.error === 'stale') { handleStale(done, staleRetried); return; }
-    setStatus(res.state);
+    setStatus(res);
     if (done) done(true);
   });
 }
@@ -75,7 +103,7 @@ function queryStatusAfterInject(done, staleRetried) {
   chrome.tabs.sendMessage(tabId, { type: 'mirza-status' }, function (res) {
     if (chrome.runtime.lastError || !res) { showCannotTranslate(); if (done) done(false); return; }
     if (res.error === 'stale') { handleStale(done, staleRetried); return; }
-    setStatus(res.state);
+    setStatus(res);
     if (done) done(true);
   });
 }
@@ -114,7 +142,7 @@ chrome.tabs.query({ active: true, currentWindow: true }, function (tabs) {
           chrome.tabs.sendMessage(tabId, { type: 'mirza-status' }, function (r) {
             if (r) {
               if (r.error && r.state === 'idle') showError(r.error);
-              else setStatus(r.state);
+              else setStatus(r);
             }
             btn.disabled = false;
           });
@@ -122,6 +150,46 @@ chrome.tabs.query({ active: true, currentWindow: true }, function (tabs) {
       });
       btn.disabled = true;
       btn.textContent = '…';
+    });
+  });
+
+  beginnerBtn.addEventListener('click', function () {
+    errorEl.style.display = 'none';
+    // پیش از فرستادن دستور، مطمئن می‌شویم اسکریپت در زبانه هست
+    queryStatus(function (ok) {
+      if (!ok) { beginnerBtn.disabled = false; return; }
+      chrome.tabs.sendMessage(tabId, { type: 'mirza-simplify' }, function (res) {
+        if (chrome.runtime.lastError || !res) {
+          showError('به صفحه وصل نشدم؛ صفحه را تازه کن و دوباره بزن.');
+          return;
+        }
+        setTimeout(function () {
+          chrome.tabs.sendMessage(tabId, { type: 'mirza-status' }, function (r) {
+            if (r) setStatus(r);
+            beginnerBtn.disabled = false;
+          });
+        }, 600);
+      });
+      beginnerBtn.disabled = true;
+      beginnerBtn.textContent = 'در حال ساده‌سازی…';
+    });
+  });
+
+  restoreBtn.addEventListener('click', function () {
+    errorEl.style.display = 'none';
+    queryStatus(function (ok) {
+      if (!ok) return;
+      chrome.tabs.sendMessage(tabId, { type: 'mirza-restore-standard' }, function (res) {
+        if (chrome.runtime.lastError || !res) {
+          showError('به صفحه وصل نشدم؛ صفحه را تازه کن و دوباره بزن.');
+          return;
+        }
+        setTimeout(function () {
+          chrome.tabs.sendMessage(tabId, { type: 'mirza-status' }, function (r) {
+            if (r) setStatus(r);
+          });
+        }, 300);
+      });
     });
   });
 });

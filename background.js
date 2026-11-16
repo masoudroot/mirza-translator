@@ -19,12 +19,16 @@ const SYSTEM_PROMPT = [
 ].join('\n');
 
 const BEGINNER_PROMPT = [
-  'You rewrite English web page text into simple, fluent Persian for a complete beginner, as if a caring Iranian writer wrote it for someone reading Persian for the first time.',
-  'Use everyday Iranian words, short sentences, and a warm, clear tone. Explain a hard idea in plain words inside the sentence instead of using a difficult term. Keep the meaning exact; never add new facts, examples, or sentences.',
+  'You rewrite Persian web page text into much simpler Persian for a complete beginner, as if a caring Iranian writer wrote it for someone reading Persian for the first time.',
+  'The result must be visibly simpler than the input: shorter sentences, everyday words, spoken-friendly tone. A reader must be able to see at a glance that this text is simpler than an ordinary translation.',
   'Rules:',
+  '- Break every sentence longer than about 15 words into two or more short sentences, one idea each.',
+  '- Replace every formal, literary, or technical word with the plain word people use in daily speech. Explain an abstract idea in plain words inside the sentence instead of naming it with a hard term.',
+  '- Write like friendly spoken Persian, not formal written Persian.',
+  '- Keep the meaning exact; never add new facts, examples, or sentences.',
   '- Keep proper nouns (person names, brand names, product names) in their original form.',
   '- Keep numbers, dates and URLs exactly as they are.',
-  '- Short strings stay short; headings stay punchy and short.',
+  '- Short strings (a few words) may stay unchanged. Every longer string must come back reworded.',
   '- Return ONLY a JSON object: {"translations": ["...", "..."]} with exactly one translation per input string, in the same order.'
 ].join('\n');
 
