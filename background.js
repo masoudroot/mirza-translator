@@ -320,7 +320,9 @@ async function checkUpdate() {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), 20000);
   try {
-    const res = await fetch(UPDATE_BASE + '/version.json?t=' + Date.now(), { signal: ctrl.signal });
+    // کش را دور می‌زنیم: نسخه روی CDN گیت‌هاب چند دقیقه کهنه می‌ماند و
+    // بررسیِ تازه نباید جواب کهنه بگیرد.
+    const res = await fetch(UPDATE_BASE + '/version.json?t=' + Date.now(), { signal: ctrl.signal, cache: 'no-store' });
     if (!res.ok) return Object.assign(failResult(httpCode(res.status), res.status), { current });
     const data = await res.json();
     if (!data || !data.version || !Array.isArray(data.files)) {

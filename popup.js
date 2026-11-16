@@ -246,6 +246,15 @@ updateBtn.addEventListener('click', function () {
 
 checkForUpdate();
 
+// بررسی دستی دوباره: پاپ‌آپ فقط موقع باز شدن بررسی می‌کند؛ اگر نسخه تازه
+// همان لحظه پوش شده باشد، با این دکمه بدون بستن پاپ‌آپ دوباره می‌پرسد.
+document.getElementById('recheckBtn').addEventListener('click', function () {
+  pendingUpdate = null;
+  updateBtn.style.display = 'none';
+  updateStatusEl.textContent = 'در حال بررسی به‌روزرسانی…';
+  checkForUpdate();
+});
+
 // ---------- تغییر مدل از همین‌جا ----------
 // فهرست مدل‌ها در حافظه کش می‌شود (mirza_models)؛ اگر برای همین درگاه نیست،
 // دکمه به‌روزرسانی آن را از درگاه می‌گیرد.
