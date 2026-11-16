@@ -42,6 +42,8 @@
   var cacheDirty = false;
   var lastTranslateError = null; // متن فارسی آخرین خطای ترجمه، برای پیام و پاپ‌آپ
   var fatalError = null; // خطای کشنده (مدل خاموش، کلید اشتباه)؛ کل ترجمه همان‌جا می‌ایستد
+  var beginnerDone = false; // بازنویسی مبتدی روی ترجمه کنونی انجام شده
+  var currentRunKind = null; // 'translate' | 'simplify' — دکمه لغو بداند چه را لغو می‌کند
 
   // ---------- ابزارهای کوچک ----------
 
@@ -98,6 +100,9 @@
           if (!parent) return NodeFilter.FILTER_REJECT;
           if (SKIP_TAGS[parent.tagName]) return NodeFilter.FILTER_REJECT;
           if (parent.closest('[hidden], [aria-hidden="true"]')) return NodeFilter.FILTER_REJECT;
+          // متن‌های خود افزونه (پیام، نوار پیشرفت، دکمه مبتدی) ترجمه نمی‌شوند؛
+          // وگرنه دیده‌بان آن‌ها را هم می‌فرستاد و برچسب دکمه عوض می‌شد.
+          if (parent.closest('#mirza-progress, #mirza-toast, #mirza-beginner-btn')) return NodeFilter.FILTER_REJECT;
           if (!isTranslatableText(node.nodeValue)) return NodeFilter.FILTER_REJECT;
           // دیده شدن ملاک نیست: بخش پنهان با CSS (زبانه، آکاردئون) هم ترجمه می‌شود
           // تا وقتی باز شد فارسی باشد.
@@ -263,22 +268,29 @@
     document.body.appendChild(bar);
     bar.querySelector('.mirza-progress-cancel').addEventListener('click', function () {
       runId++;
-      state = 'idle';
       removeProgressBar();
-      showToast('ترجمه لغو شد؛ متن‌های ترجمه‌شده سر جایشان ماندند.');
+      if (currentRunKind === 'simplify') {
+        currentRunKind = null;
+        showBeginnerButton();
+        showToast('ساده‌سازی لغو شد؛ ترجمه سر جایش ماند.');
+      } else {
+        currentRunKind = null;
+        state = 'idle';
+        showToast('ترجمه لغو شد؛ متن‌های ترجمه‌شده سر جایشان ماندند.');
+      }
     });
     return bar;
   }
 
   // درصد با وزن نویسه است، نه تعداد دسته؛ وگرنه دسته ۲۰ جمله کوتاه با دسته
   // ۴۰۰۰ نویسه‌ای یکسان شمرده می‌شد و عدد با چیزی که روی صفحه می‌بینی نمی‌خواند.
-  function updateProgress(doneChars, totalChars, doneItems, totalItems) {
+  function updateProgress(doneChars, totalChars, doneItems, totalItems, label) {
     var bar = document.getElementById('mirza-progress');
     if (!bar) return;
     var pct = totalChars ? Math.round((doneChars / totalChars) * 100) : 0;
     bar.querySelector('.mirza-progress-fill').style.width = pct + '%';
     bar.querySelector('.mirza-progress-text').textContent =
-      'در حال ترجمه… ' + toFaDigits(pct) + '٪ (' + toFaDigits(doneItems) + ' از ' + toFaDigits(totalItems) + ')';
+      (label || 'در حال ترجمه…') + ' ' + toFaDigits(pct) + '٪ (' + toFaDigits(doneItems) + ' از ' + toFaDigits(totalItems) + ')';
   }
 
   function removeProgressBar() {
@@ -296,17 +308,37 @@
     setTimeout(function () { if (toast.isConnected) toast.remove(); }, 5000);
   }
 
+  // دکمه «ترجمه برای مبتدی» بعد از پایان ترجمه می‌آید و تا برگشت به انگلیسی
+  // یا ترجمه تازه می‌ماند؛ بالاتر از پیام می‌نشیند تا روی هم نیفتند.
+  function showBeginnerButton() {
+    if (state !== 'translated') return;
+    if (!translatedNodes.length) return;
+    if (beginnerDone) return;
+    if (document.getElementById('mirza-beginner-btn')) return;
+    var btn = document.createElement('button');
+    btn.id = 'mirza-beginner-btn';
+    btn.type = 'button';
+    btn.textContent = 'ترجمه برای مبتدی';
+    btn.addEventListener('click', function () { simplifyForBeginner(); });
+    document.body.appendChild(btn);
+  }
+
+  function hideBeginnerButton() {
+    var btn = document.getElementById('mirza-beginner-btn');
+    if (btn) btn.remove();
+  }
+
   // ---------- حرف زدن با پس‌زمینه ----------
 
   function sleep(ms) {
     return new Promise(function (resolve) { setTimeout(resolve, ms); });
   }
 
-  function translateBatchViaBackground(texts, settings) {
+  function translateBatchViaBackground(texts, settings, mode) {
     return new Promise(function (resolve) {
       try {
         chrome.runtime.sendMessage(
-          { type: 'mirza-api-translate', texts: texts, settings: settings },
+          { type: 'mirza-api-translate', texts: texts, settings: settings, mode: mode },
           function (res) { resolve(res || { ok: false, error: 'no_response' }); }
         );
       } catch (e) {
@@ -332,25 +364,31 @@
   // هم خراب شد، همان نیمه تک‌تک می‌رود. خطای کشنده (مدل خاموش، کلید
   // اشتباه) همان‌جا کل ترجمه را می‌ایستاند تا درخواست بیهوده نرود.
   // خروجی آرایه‌ای هم‌طول ورودی است؛ جای رشته‌های ناموفق null می‌ماند.
-  async function translateTexts(texts, settings, depth) {
+  // حالت مبتدی کش جدا دارد (کلید 'b' + هش) تا ترجمه ساده جای ترجمه معمولی را
+  // نگیرد و برعکس؛ ورودی‌اش متن انگلیسی اصلی است، خروجی‌اش فارسی ساده.
+  function cacheKey(text, mode) {
+    return mode === 'beginner' ? 'b' + hashText(text) : hashText(text);
+  }
+
+  async function translateTexts(texts, settings, depth, mode) {
     var out = new Array(texts.length).fill(null);
     var missing = [];
     var missingIdx = [];
     texts.forEach(function (t, i) {
-      var hit = cache[hashText(t)];
+      var hit = cache[cacheKey(t, mode)];
       if (hit) out[i] = hit;
       else { missing.push(t); missingIdx.push(i); }
     });
     if (!missing.length) return out;
 
-    var res = await translateBatchViaBackground(missing, settings);
+    var res = await translateBatchViaBackground(missing, settings, mode);
     if (!res.ok && !res.fatal && !depth) {
       if (res.error === 'rate_limited') await sleep(5000);
-      res = await translateBatchViaBackground(missing, settings);
+      res = await translateBatchViaBackground(missing, settings, mode);
     }
     if (res.ok && res.translations) {
       missing.forEach(function (t, k) {
-        cache[hashText(t)] = res.translations[k];
+        cache[cacheKey(t, mode)] = res.translations[k];
         out[missingIdx[k]] = res.translations[k];
       });
       cacheDirty = true;
@@ -370,8 +408,8 @@
       // دسته خراب شد (مثلاً تعداد ترجمه‌ها نخورد)؛ یک بار نصف می‌کنیم تا
       // رشته خراب جدا بیفتد. دو نیمه پشت سر هم می‌روند تا هم‌زمان شلوغ نشود.
       var mid = Math.ceil(missing.length / 2);
-      var left = await translateTexts(missing.slice(0, mid), settings, 1);
-      var right = await translateTexts(missing.slice(mid), settings, 1);
+      var left = await translateTexts(missing.slice(0, mid), settings, 1, mode);
+      var right = await translateTexts(missing.slice(mid), settings, 1, mode);
       left.forEach(function (tr, k) { if (tr) out[missingIdx[k]] = tr; });
       right.forEach(function (tr, k) { if (tr) out[missingIdx[mid + k]] = tr; });
       return out;
@@ -383,9 +421,9 @@
     async function singleWorker() {
       while (si < missing.length && !fatalError) {
         var k = si++;
-        var one = await translateBatchViaBackground([missing[k]], settings);
+        var one = await translateBatchViaBackground([missing[k]], settings, mode);
         if (one.ok && one.translations && one.translations[0]) {
-          cache[hashText(missing[k])] = one.translations[0];
+          cache[cacheKey(missing[k], mode)] = one.translations[0];
           singleResults[k] = one.translations[0];
           cacheDirty = true;
         } else if (one && one.fatal) {
@@ -406,7 +444,7 @@
 
   // اجرای دسته‌ها: گرفتن موازی، ولی جایگذاری دقیقاً به ترتیب دسته‌ها تا ترجمه
   // از بالای صفحه به پایین بیاید و وسط صفحه زودتر ننشیند.
-  async function runBatches(batches, settings, myRun, applyEntry, onBatchDone, onFirstApplied) {
+  async function runBatches(batches, settings, myRun, applyEntry, onBatchDone, onFirstApplied, mode) {
     var failed = 0;
     var firstDone = false;
     var slots = new Array(batches.length);
@@ -417,7 +455,7 @@
         while (myRun === runId && !fatalError) {
           var idx = next++;
           if (idx >= batches.length) break;
-          slots[idx] = translateTexts(batches[idx].map(function (e) { return e.text; }), settings);
+          slots[idx] = translateTexts(batches[idx].map(function (e) { return e.text; }), settings, 0, mode);
           try { await slots[idx]; } catch (_e) { /* translateTexts همیشه آرایه برمی‌گرداند */ }
         }
       })());
@@ -482,6 +520,9 @@
 
     state = 'translating';
     var myRun = ++runId;
+    currentRunKind = 'translate';
+    beginnerDone = false;
+    hideBeginnerButton();
     lastTranslateError = null;
     fatalError = null;
     await loadCache();
@@ -537,15 +578,17 @@
     if (!fatalError && (translatedNodes.length || translatedAttrs.length)) translateTitle(settings, myRun);
 
     saveCache();
+    currentRunKind = null;
     removeProgressBar();
     if (fatalError) {
       // خطای کشنده: یا هیچ‌چیز ترجمه نشده، یا وسط کار متوقف شده؛ پیامش خودش راهنماست.
       state = (translatedNodes.length || translatedAttrs.length) ? 'translated' : 'idle';
-      if (state === 'translated') startObserver(settings);
+      if (state === 'translated') { startObserver(settings); showBeginnerButton(); }
       showToast(fatalError);
     } else if (translatedNodes.length || translatedAttrs.length) {
       state = 'translated';
       startObserver(settings);
+      showBeginnerButton();
       showToast(
         failedTotal > 0
           ? 'ترجمه تمام شد؛ ' + toFaDigits(failedTotal) + ' جمله ترجمه نشد. ' + (lastTranslateError || 'اتصال را بررسی کن و دوباره بزن.')
@@ -557,8 +600,107 @@
     }
   }
 
+  // ---------- ساده‌سازی برای مبتدی ----------
+
+  // دکمه «ترجمه برای مبتدی» متن انگلیسی اصلی را دوباره می‌خواند و فارسی
+  // ساده می‌نویسد؛ انگار یک نویسنده ایرانی برای یک مبتدی نوشته است.
+  // جایگذاری فقط روی گره‌های ترجمه‌شده است و اصل انگلیسی سر جایش می‌ماند،
+  // پس برگشت به انگلیسی بعد از ساده‌سازی هم سالم کار می‌کند.
+  async function simplifyForBeginner() {
+    if (state !== 'translated' || beginnerDone) return;
+    var settings = await getSettings();
+    if (!settings || !settings.apiKey) {
+      showToast('کلید API را در تنظیمات افزونه بگذار؛ بعد دوباره بزن.');
+      return;
+    }
+    var myRun = ++runId;
+    currentRunKind = 'simplify';
+    lastTranslateError = null;
+    fatalError = null;
+    hideBeginnerButton();
+    await loadCache();
+
+    var byText = new Map();
+    translatedNodes.forEach(function (item) {
+      var trimmed = String(item.original).trim();
+      if (!isTranslatableText(trimmed)) return;
+      if (!byText.has(trimmed)) byText.set(trimmed, { text: trimmed, nodes: [] });
+      byText.get(trimmed).nodes.push(item.node);
+    });
+    var entries = Array.from(byText.values());
+    if (!entries.length) { currentRunKind = null; return; }
+    // دسته‌بندی مثل ترجمه، ولی بدون دسته اول کوچک؛ بالای صفحه همین حالا فارسی است.
+    var batches = [];
+    var current = [];
+    var chars = 0;
+    entries.forEach(function (entry) {
+      if (current.length >= MAX_ITEMS_PER_BATCH || chars + entry.text.length > MAX_CHARS_PER_BATCH) {
+        if (current.length) batches.push(current);
+        current = [];
+        chars = 0;
+      }
+      current.push(entry);
+      chars += entry.text.length;
+    });
+    if (current.length) batches.push(current);
+
+    var totalChars = 0;
+    var totalItems = 0;
+    batches.forEach(function (batch) {
+      batch.forEach(function (entry) { totalChars += entry.text.length; totalItems++; });
+    });
+    var doneChars = 0;
+    var doneItems = 0;
+    var failedTotal = 0;
+    var onBatchDone = function (charsDone, itemsDone) {
+      doneChars += charsDone;
+      doneItems += itemsDone;
+      updateProgress(doneChars, totalChars, doneItems, totalItems, 'در حال ساده‌سازی برای مبتدی…');
+    };
+    ensureProgressBar();
+    updateProgress(0, totalChars, 0, totalItems, 'در حال ساده‌سازی برای مبتدی…');
+
+    var applyBeginner = function (entry, translated) {
+      entry.nodes.forEach(function (node) {
+        if (!node.isConnected) return;
+        var m = node.nodeValue.match(/^(\s*)([\s\S]*?)(\s*)$/);
+        node.nodeValue = (m ? m[1] : '') + translated + (m ? m[3] : '');
+      });
+    };
+    var r = await runBatches(batches, settings, myRun, applyBeginner, onBatchDone, null, 'beginner');
+    if (myRun !== runId) return; // لغو شده بود؛ دکمه لغو خودش دکمه مبتدی را برگرداند
+    failedTotal += r.failed;
+
+    // عنوان صفحه هم با همان لحن ساده می‌شود.
+    if (!fatalError && originalTitle !== null) {
+      translateBatchViaBackground([originalTitle.trim()], settings, 'beginner').then(function (res) {
+        if (myRun === runId && res.ok && res.translations && res.translations[0]) {
+          document.title = res.translations[0];
+        }
+      });
+    }
+
+    currentRunKind = null;
+    saveCache();
+    removeProgressBar();
+    if (fatalError) {
+      showBeginnerButton();
+      showToast(fatalError);
+    } else if (failedTotal > 0) {
+      showBeginnerButton();
+      showToast('ساده‌سازی ناتمام ماند؛ ' + toFaDigits(failedTotal) + ' جمله ساده نشد. ' + (lastTranslateError || 'دوباره بزن.'));
+    } else {
+      beginnerDone = true;
+      showToast('ساده و روان شد؛ انگار یک نویسنده ایرانی برای یک مبتدی نوشته.');
+    }
+  }
+
   function restorePage() {
     runId++;
+    currentRunKind = null;
+    beginnerDone = false;
+    hideBeginnerButton();
+    removeProgressBar();
     translatedNodes.forEach(function (item) {
       if (item.node.isConnected) item.node.nodeValue = item.original;
     });

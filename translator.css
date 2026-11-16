@@ -78,3 +78,28 @@
   max-width: 90vw;
   text-align: center;
 }
+
+/* دکمه «ترجمه برای مبتدی»: بعد از ترجمه می‌آید و بالاتر از پیام می‌نشیند
+   تا روی هم نیفتند؛ با رفتن پیام سر جایش می‌ماند تا وقتی لازمش داری. */
+#mirza-beginner-btn {
+  position: fixed;
+  bottom: 84px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 2147483647;
+  background: #104C46;
+  color: #fff;
+  border: none;
+  border-radius: 12px;
+  padding: 10px 18px;
+  font-family: Vazirmatn, Tahoma, sans-serif;
+  font-size: 13px;
+  font-weight: 700;
+  direction: rtl;
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.25);
+  cursor: pointer;
+}
+
+#mirza-beginner-btn:hover {
+  background: #0B3A35;
+}

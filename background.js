@@ -18,9 +18,19 @@ const SYSTEM_PROMPT = [
   '- Return ONLY a JSON object: {"translations": ["...", "..."]} with exactly one translation per input string, in the same order.'
 ].join('\n');
 
+const BEGINNER_PROMPT = [
+  'You rewrite English web page text into simple, fluent Persian for a complete beginner, as if a caring Iranian writer wrote it for someone reading Persian for the first time.',
+  'Use everyday Iranian words, short sentences, and a warm, clear tone. Explain a hard idea in plain words inside the sentence instead of using a difficult term. Keep the meaning exact; never add new facts, examples, or sentences.',
+  'Rules:',
+  '- Keep proper nouns (person names, brand names, product names) in their original form.',
+  '- Keep numbers, dates and URLs exactly as they are.',
+  '- Short strings stay short; headings stay punchy and short.',
+  '- Return ONLY a JSON object: {"translations": ["...", "..."]} with exactly one translation per input string, in the same order.'
+].join('\n');
+
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   if (msg.type === 'mirza-api-translate') {
-    translateBatch(msg.texts, msg.settings).then(sendResponse);
+    translateBatch(msg.texts, msg.settings, msg.mode).then(sendResponse);
     return true; // async
   }
   if (msg.type === 'mirza-test') {
@@ -208,15 +218,18 @@ function parseTranslations(content, expectedCount) {
   return null;
 }
 
-async function translateBatch(texts, settings) {
+async function translateBatch(texts, settings, mode) {
   if (!settings || !settings.apiKey) {
     return failResult('no_api_key');
   }
   if (!settings.baseUrl || !settings.model) {
     return failResult('no_settings');
   }
+  // حالت مبتدی: همان متن انگلیسی دوباره خوانده می‌شود و فارسی ساده برای
+  // یک مبتدی نوشته می‌شود؛ پرامپت در تلاش دوباره و تعمیر هم همان می‌ماند.
+  const prompt = mode === 'beginner' ? BEGINNER_PROMPT : SYSTEM_PROMPT;
   const messages = [
-    { role: 'system', content: SYSTEM_PROMPT },
+    { role: 'system', content: prompt },
     { role: 'user', content: JSON.stringify({ texts }) }
   ];
 
@@ -233,7 +246,7 @@ async function translateBatch(texts, settings) {
     // تعداد ترجمه‌ها نخورد؛ یک بار با یادآوری دقیق دوباره می‌خواهیم.
     // این یک درخواست اضافه است، ولی از فرستادن تک‌تک رشته‌ها خیلی سریع‌تر است.
     const repair = await postChat(settings, [
-      { role: 'system', content: SYSTEM_PROMPT },
+      { role: 'system', content: prompt },
       { role: 'user', content: JSON.stringify({ texts }) },
       { role: 'assistant', content: res.content },
       { role: 'user', content: 'Your reply had the wrong number of translations. Reply again with exactly ' + texts.length + ' translations, one per input string, in the same order, as {"translations": [...]}.' }
