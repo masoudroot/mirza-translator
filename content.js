@@ -44,6 +44,8 @@
   var fatalError = null; // خطای کشنده (مدل خاموش، کلید اشتباه)؛ کل ترجمه همان‌جا می‌ایستد
   var beginnerDone = false; // بازنویسی مبتدی روی ترجمه کنونی انجام شده
   var currentRunKind = null; // 'translate' | 'simplify' — دکمه لغو بداند چه را لغو می‌کند
+  var standardTitle = null; // عنوان فارسی معمولی (برای پشتیبان)
+  var beginnerTitle = null; // عنوان ساده‌شده (برای پشتیبان)
 
   // ---------- ابزارهای کوچک ----------
 
@@ -85,6 +87,149 @@
     try {
       chrome.storage.local.set({ mirza_cache: cache });
     } catch (_e) { /* حافظه پر شده؛ ترجمه ادامه می‌یابد، فقط کش ذخیره نمی‌شود */ }
+  }
+
+  // ---------- پشتیبان ترجمه ----------
+  // بعد از هر ترجمه، یک نسخه از ترجمه همین صفحه ذخیره می‌شود تا با رفرش یا
+  // بستن صفحه از دست نرود؛ هم ترجمه معمولی، هم ساده. بازیابی خودکار است و
+  // بدون درخواست تازه انجام می‌شود. پشتیبان برای هر نشانی جدا نگه داشته
+  // می‌شود و فقط ۵۰ صفحه آخر می‌مانند.
+
+  var MAX_BACKUPS = 50;
+
+  function backupUrl() {
+    try {
+      var u = new URL(location.href);
+      u.hash = '';
+      var drop = [];
+      u.searchParams.forEach(function (_v, k) {
+        if (/^(utm_|fbclid|gclid|mc_)/i.test(k)) drop.push(k);
+      });
+      drop.forEach(function (k) { u.searchParams.delete(k); });
+      return u.toString();
+    } catch (_e) {
+      return String(location.href).split('#')[0];
+    }
+  }
+
+  function backupKey() {
+    return 'mirza_backup_' + hashText(backupUrl());
+  }
+
+  function storageGet(key) {
+    return new Promise(function (resolve) {
+      try {
+        chrome.storage.local.get(key, function (r) { resolve(r ? r[key] : null); });
+      } catch (_e) { resolve(null); }
+    });
+  }
+
+  async function saveBackup(mode) {
+    if (state !== 'translated' || !translatedNodes.length) return;
+    var key = backupKey();
+    var prev = await storageGet(key);
+    var standard = {};
+    var beginner = (prev && prev.beginner) || {};
+    translatedNodes.forEach(function (item) {
+      if (!item.node.isConnected || item.standard === undefined) return;
+      var en = String(item.original).trim();
+      if (isTranslatableText(en)) standard[hashText(en)] = item.standard;
+      if (beginnerDone) {
+        var cur = item.node.nodeValue.trim();
+        if (isTranslatableText(cur)) beginner[hashText(String(item.standard).trim())] = cur;
+      }
+    });
+    if (!Object.keys(standard).length) return;
+    var rec = {
+      url: backupUrl(),
+      titleEn: originalTitle,
+      titleFa: standardTitle,
+      titleBeginner: beginnerDone ? beginnerTitle : ((prev && prev.titleBeginner) || null),
+      mode: mode,
+      standard: standard,
+      beginner: beginner,
+      savedAt: Date.now()
+    };
+    try {
+      var obj = {};
+      obj[key] = rec;
+      chrome.storage.local.set(obj);
+    } catch (_e) { /* ذخیره نشد؛ ترجمه سر جایش می‌ماند */ }
+    // فهرست پشتیبان‌ها برای هرس؛ فقط فراداده است، نه خود ترجمه‌ها.
+    try {
+      chrome.storage.local.get('mirza_backup_index', function (r) {
+        var idx = (r && r.mirza_backup_index) || [];
+        idx = idx.filter(function (e) { return e.key !== key; });
+        idx.unshift({ key: key, url: rec.url, title: rec.titleEn || rec.url, mode: mode, savedAt: rec.savedAt });
+        var pruned = idx.slice(MAX_BACKUPS);
+        idx = idx.slice(0, MAX_BACKUPS);
+        try { chrome.storage.local.set({ mirza_backup_index: idx }); } catch (_e2) {}
+        pruned.forEach(function (e) {
+          try { chrome.storage.local.remove(e.key); } catch (_e3) {}
+        });
+      });
+    } catch (_e) {}
+  }
+
+  function deleteBackup() {
+    try {
+      var key = backupKey();
+      chrome.storage.local.remove(key);
+      chrome.storage.local.get('mirza_backup_index', function (r) {
+        var idx = (r && r.mirza_backup_index) || [];
+        var next = idx.filter(function (e) { return e.key !== key; });
+        if (next.length !== idx.length) {
+          try { chrome.storage.local.set({ mirza_backup_index: next }); } catch (_e2) {}
+        }
+      });
+    } catch (_e) {}
+  }
+
+  // اگر برای این نشانی پشتیبان هست، صفحه با همان ترجمه بالا می‌آید؛ بدون
+  // درخواست تازه. متن‌هایی که در پشتیبان نیستند انگلیسی می‌مانند تا با
+  // ترجمه تازه (از کش یا درگاه) پر شوند.
+  async function restoreFromBackup() {
+    if (state !== 'idle') return;
+    var rec = await storageGet(backupKey());
+    if (!rec || !rec.standard || !Object.keys(rec.standard).length) return;
+    var nodes = collectTextNodes(document.body);
+    var applied = 0;
+    nodes.forEach(function (node) {
+      var en = node.nodeValue.trim();
+      if (!isTranslatableText(en)) return;
+      var std = rec.standard[hashText(en)];
+      if (std === undefined) return;
+      var target = std;
+      if (rec.mode === 'beginner' && rec.beginner) {
+        var b = rec.beginner[hashText(String(std).trim())];
+        if (b !== undefined) target = b;
+      }
+      var m = node.nodeValue.match(/^(\s*)([\s\S]*?)(\s*)$/);
+      translatedNodes.push({ node: node, original: node.nodeValue, standard: std });
+      node.nodeValue = (m ? m[1] : '') + target + (m ? m[3] : '');
+      applied++;
+    });
+    if (!applied) return;
+    if (rec.mode === 'beginner' && rec.titleBeginner) {
+      originalTitle = rec.titleEn || document.title;
+      beginnerTitle = rec.titleBeginner;
+      standardTitle = rec.titleFa || null;
+      document.title = rec.titleBeginner;
+    } else if (rec.titleFa) {
+      originalTitle = rec.titleEn || document.title;
+      standardTitle = rec.titleFa;
+      beginnerTitle = rec.titleBeginner || null;
+      document.title = rec.titleFa;
+    }
+    state = 'translated';
+    beginnerDone = (rec.mode === 'beginner');
+    enableRtl();
+    var settings = await Promise.race([
+      getSettings(),
+      new Promise(function (resolve) { setTimeout(function () { resolve(null); }, 2000); })
+    ]);
+    if (settings && settings.apiKey) startObserver(settings);
+    showToast(rec.mode === 'beginner' ? 'ترجمه ساده از پشتیبان برگشت.' : 'ترجمه از پشتیبان برگشت.');
   }
 
   // ---------- جمع‌آوری متن ----------
@@ -473,6 +618,7 @@
     originalTitle = document.title;
     translateBatchViaBackground([document.title.trim()], settings).then(function (res) {
       if (myRun === runId && res.ok && res.translations && res.translations[0]) {
+        standardTitle = res.translations[0];
         document.title = res.translations[0];
       }
     });
@@ -503,6 +649,8 @@
     var myRun = ++runId;
     currentRunKind = 'translate';
     beginnerDone = false;
+    standardTitle = null;
+    beginnerTitle = null;
     lastTranslateError = null;
     fatalError = null;
     await loadCache();
@@ -563,11 +711,12 @@
     if (fatalError) {
       // خطای کشنده: یا هیچ‌چیز ترجمه نشده، یا وسط کار متوقف شده؛ پیامش خودش راهنماست.
       state = (translatedNodes.length || translatedAttrs.length) ? 'translated' : 'idle';
-      if (state === 'translated') startObserver(settings);
+      if (state === 'translated') { startObserver(settings); saveBackup('standard'); }
       showToast(fatalError);
     } else if (translatedNodes.length || translatedAttrs.length) {
       state = 'translated';
       startObserver(settings);
+      saveBackup('standard');
       showToast(
         failedTotal > 0
           ? 'ترجمه تمام شد؛ ' + toFaDigits(failedTotal) + ' جمله ترجمه نشد. ' + (lastTranslateError || 'اتصال را بررسی کن و دوباره بزن.')
@@ -585,6 +734,50 @@
   // مدل همان متن را ساده‌تر می‌نویسد، پس تغییر روی صفحه دیده می‌شود.
   // ترجمه معمولی هر گره در translatedNodes.standard مانده، پس بازگشت به آن
   // بدون درخواست تازه انجام می‌شود.
+
+  // دسته‌بندی مثل ترجمه، ولی بدون دسته اول کوچک؛ بالای صفحه همین حالا فارسی است.
+  function buildSimpleBatches(entries) {
+    var batches = [];
+    var current = [];
+    var chars = 0;
+    entries.forEach(function (entry) {
+      if (current.length >= MAX_ITEMS_PER_BATCH || chars + entry.text.length > MAX_CHARS_PER_BATCH) {
+        if (current.length) batches.push(current);
+        current = [];
+        chars = 0;
+      }
+      current.push(entry);
+      chars += entry.text.length;
+    });
+    if (current.length) batches.push(current);
+    return batches;
+  }
+
+  function applyBeginnerEntry(entry, translated) {
+    entry.nodes.forEach(function (node) {
+      if (!node.isConnected) return;
+      var m = node.nodeValue.match(/^(\s*)([\s\S]*?)(\s*)$/);
+      node.nodeValue = (m ? m[1] : '') + translated + (m ? m[3] : '');
+    });
+  }
+
+  // ساده‌سازی بی‌صدا برای گره‌های تازه‌ای که دیده‌بان بعد از ساده‌سازی می‌آورد؛
+  // نوار پیشرفت و پیام ندارد و فقط گره‌هایی که ترجمه معمولی‌شان ثبت شده ساده می‌شوند.
+  async function simplifyNodes(nodes, settings, myRun) {
+    var byText = new Map();
+    nodes.forEach(function (node) {
+      if (!node.isConnected) return;
+      if (!translatedNodes.some(function (item) { return item.node === node; })) return;
+      var cur = node.nodeValue.trim();
+      if (!isTranslatableText(cur)) return;
+      if (!byText.has(cur)) byText.set(cur, { text: cur, nodes: [] });
+      byText.get(cur).nodes.push(node);
+    });
+    var entries = Array.from(byText.values());
+    if (!entries.length) return;
+    var batches = buildSimpleBatches(entries);
+    await runBatches(batches, settings, myRun, applyBeginnerEntry, null, null, 'beginner');
+  }
   async function simplifyForBeginner() {
     if (state !== 'translated' || beginnerDone) return;
     var settings = await getSettings();
@@ -608,20 +801,7 @@
     });
     var entries = Array.from(byText.values());
     if (!entries.length) { currentRunKind = null; return; }
-    // دسته‌بندی مثل ترجمه، ولی بدون دسته اول کوچک؛ بالای صفحه همین حالا فارسی است.
-    var batches = [];
-    var current = [];
-    var chars = 0;
-    entries.forEach(function (entry) {
-      if (current.length >= MAX_ITEMS_PER_BATCH || chars + entry.text.length > MAX_CHARS_PER_BATCH) {
-        if (current.length) batches.push(current);
-        current = [];
-        chars = 0;
-      }
-      current.push(entry);
-      chars += entry.text.length;
-    });
-    if (current.length) batches.push(current);
+    var batches = buildSimpleBatches(entries);
 
     var totalChars = 0;
     var totalItems = 0;
@@ -639,13 +819,7 @@
     ensureProgressBar();
     updateProgress(0, totalChars, 0, totalItems, 'در حال ساده‌سازی برای مبتدی…');
 
-    var applyBeginner = function (entry, translated) {
-      entry.nodes.forEach(function (node) {
-        if (!node.isConnected) return;
-        var m = node.nodeValue.match(/^(\s*)([\s\S]*?)(\s*)$/);
-        node.nodeValue = (m ? m[1] : '') + translated + (m ? m[3] : '');
-      });
-    };
+    var applyBeginner = applyBeginnerEntry;
     var r = await runBatches(batches, settings, myRun, applyBeginner, onBatchDone, null, 'beginner');
     if (myRun !== runId) return; // لغو شده بود
     failedTotal += r.failed;
@@ -657,11 +831,13 @@
       if (currentTitle) {
         var titleKey = cacheKey(currentTitle, 'beginner');
         if (cache[titleKey]) {
+          beginnerTitle = cache[titleKey];
           document.title = cache[titleKey];
         } else {
           translateBatchViaBackground([currentTitle], settings, 'beginner').then(function (res) {
             if (myRun === runId && res.ok && res.translations && res.translations[0]) {
               cache[titleKey] = res.translations[0];
+              beginnerTitle = res.translations[0];
               document.title = res.translations[0];
             }
           });
@@ -678,6 +854,7 @@
       showToast('ساده‌سازی ناتمام ماند؛ ' + toFaDigits(failedTotal) + ' جمله ساده نشد. ' + (lastTranslateError || 'دوباره بزن.'));
     } else {
       beginnerDone = true;
+      saveBackup('beginner');
       showToast('ساده و روان شد؛ انگار یک نویسنده ایرانی برای یک مبتدی نوشته.');
     }
   }
@@ -691,6 +868,7 @@
       item.node.nodeValue = (m ? m[1] : '') + item.standard + (m ? m[3] : '');
     });
     beginnerDone = false;
+    saveBackup('standard');
     showToast('به ترجمه معمولی برگشت.');
   }
 
@@ -698,6 +876,8 @@
     runId++;
     currentRunKind = null;
     beginnerDone = false;
+    standardTitle = null;
+    beginnerTitle = null;
     removeProgressBar();
     translatedNodes.forEach(function (item) {
       if (item.node.isConnected) item.node.nodeValue = item.original;
@@ -711,6 +891,7 @@
     disableRtl();
     stopObserver();
     state = 'idle';
+    deleteBackup();
     showToast('به متن اصلی برگشت.');
   }
 
@@ -739,6 +920,9 @@
     if (!nodes.length) return;
     var batches = buildBatches(nodes);
     await runBatches(batches, settings, myRun, applyTranslation, null, null);
+    if (myRun !== runId) return;
+    // اگر صفحه در حالت مبتدی است، گره تازه هم همان لحن ساده را می‌گیرد.
+    if (beginnerDone) await simplifyNodes(nodes, settings, myRun);
     saveCache();
   }
 
@@ -767,4 +951,8 @@
     }
     return false;
   });
+
+  // اگر برای این نشانی پشتیبان ترجمه هست، صفحه با همان ترجمه بالا می‌آید؛
+  // بدون درخواست تازه.
+  restoreFromBackup();
 })();
