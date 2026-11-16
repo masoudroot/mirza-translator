@@ -34,7 +34,7 @@ const BEGINNER_PROMPT = [
 
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   if (msg.type === 'mirza-api-translate') {
-    translateBatch(msg.texts, msg.settings, msg.mode).then(sendResponse);
+    translateBatch(msg.texts, msg.settings, msg.mode, msg.model).then(sendResponse);
     return true; // async
   }
   if (msg.type === 'mirza-test') {
@@ -137,6 +137,93 @@ function failResult(code, status, detail) {
   return { ok: false, error: code, errorText: describeError(code, status, detail), status: status || 0, fatal: !!FATAL_ERRORS[code] };
 }
 
+// ---------- جایگزینی خودکار مدل ----------
+// اگر مدلِ انتخاب‌شده جواب ندهد، پس‌زمینه خودش سراغ مدل بعدی می‌رود و بقیه
+// کار را با آن پیش می‌برد؛ کاربر لازم نیست دوباره دکمه بزند.
+// نقشه سلامت (mirza_model_health): هر مدل کی آخرین بار سالم جواب داد و کی
+// خراب شد؛ مدل خراب تا یک ساعت دیگر نامزد نمی‌شود تا هر بار همان تلاش
+// بیهوده تکرار نشود. لایه تندِ حافظه کارگر هم همین را نگه می‌دارد تا دسته‌های
+// موازیِ یک اجرا، خرابیِ تازه را بی‌درنگ ببینند.
+
+var MODEL_HEALTH_KEY = 'mirza_model_health';
+var MODEL_MODELS_KEY = 'mirza_models';
+var SICK_TTL_MS = 3600000; // یک ساعت
+var MAX_MODEL_ATTEMPTS = 3; // مدل انتخاب‌شده + حداکثر دو جایگزین در هر دسته
+var modelHealthMemory = {};
+
+// خطاهایی که با عوض کردن مدل درست می‌شوند؛ بقیه (کلید اشتباه، شبکه) با
+// مدل دیگر هم همان می‌مانند و جایگزینی بیهوده است.
+var FALLBACK_ERRORS = { model_unavailable: true, not_found: true, timeout: true, rate_limited: true, bad_response: true };
+
+function storageGet(keys) {
+  return new Promise(function (resolve) {
+    try {
+      chrome.storage.local.get(keys, function (r) { resolve(r || {}); });
+    } catch (_e) { resolve({}); }
+  });
+}
+
+function recordModelOutcome(model, ok) {
+  if (!model) return;
+  var now = Date.now();
+  var rec = modelHealthMemory[model] || {};
+  if (ok) rec.ok = now; else rec.fail = now;
+  modelHealthMemory[model] = rec;
+  // ذخیره ماندگار؛ خواندن بعدیِ نامزدها از همین‌جا می‌آید. کل نقشه درون‌حافظه
+  // هر بار ادغام می‌شود تا نوشتن‌های هم‌زمانِ دسته‌های موازی هم را نبلعند.
+  try {
+    storageGet([MODEL_HEALTH_KEY]).then(function (r) {
+      var map = (r && r[MODEL_HEALTH_KEY]) || {};
+      Object.keys(modelHealthMemory).forEach(function (m) {
+        var mem = modelHealthMemory[m];
+        var entry = map[m] || {};
+        entry.ok = Math.max(entry.ok || 0, mem.ok || 0);
+        entry.fail = Math.max(entry.fail || 0, mem.fail || 0);
+        map[m] = entry;
+      });
+      try { chrome.storage.local.set({ mirza_model_health: map }); } catch (_e) {}
+    });
+  } catch (_e) {}
+}
+
+function isSick(rec, now) {
+  return !!rec && !!rec.fail && (!rec.ok || rec.fail > rec.ok) && (now - rec.fail) < SICK_TTL_MS;
+}
+
+// ترتیب نامزدها: اول مدل انتخاب‌شده اگر سالم است؛ بعد مدل‌هایی که تازگی سالم
+// جواب داده‌اند (تازه‌ترین اول)؛ بعد بقیه مدل‌های سالم، به ترتیب فهرست درگاه.
+// فهرست مدل‌ها از کش خوانده می‌شود (پاپ‌آپ و تنظیمات همان را تازه می‌کنند)؛
+// پس‌زمینه برای ترجمه به شبکه نمی‌رود تا دسته سالم، درخواست اضافه نخورد.
+// اگر هیچ مدل سالمی نماند، همان مدل انتخاب‌شده را می‌زنیم؛ بهتر از هیچ است.
+async function orderedCandidates(settings, preferredModel) {
+  var now = Date.now();
+  var stored = await storageGet([MODEL_MODELS_KEY, MODEL_HEALTH_KEY]);
+  var cached = stored[MODEL_MODELS_KEY] || {};
+  var list = [];
+  if (Array.isArray(cached.models) && cleanBaseUrl(cached.baseUrl || '') === cleanBaseUrl(settings.baseUrl)) {
+    list = cached.models;
+  }
+  var health = Object.assign({}, stored[MODEL_HEALTH_KEY] || {});
+  Object.keys(modelHealthMemory).forEach(function (m) {
+    var mem = modelHealthMemory[m];
+    var old = health[m] || {};
+    health[m] = {
+      ok: Math.max(old.ok || 0, mem.ok || 0),
+      fail: Math.max(old.fail || 0, mem.fail || 0)
+    };
+  });
+  var seen = {};
+  var ordered = [];
+  function push(m) { if (m && !seen[m]) { seen[m] = true; ordered.push(m); } }
+  if (!isSick(health[preferredModel], now)) push(preferredModel);
+  var proven = list.filter(function (m) { return health[m] && health[m].ok && !isSick(health[m], now); });
+  proven.sort(function (a, b) { return (health[b].ok || 0) - (health[a].ok || 0); });
+  proven.forEach(push);
+  list.forEach(function (m) { if (!isSick(health[m], now)) push(m); });
+  if (!ordered.length) push(preferredModel);
+  return ordered;
+}
+
 function sleepMs(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -222,13 +309,37 @@ function parseTranslations(content, expectedCount) {
   return null;
 }
 
-async function translateBatch(texts, settings, mode) {
+async function translateBatch(texts, settings, mode, preferredModel) {
   if (!settings || !settings.apiKey) {
     return failResult('no_api_key');
   }
   if (!settings.baseUrl || !settings.model) {
     return failResult('no_settings');
   }
+  var preferred = preferredModel || settings.model;
+  var candidates = await orderedCandidates(settings, preferred);
+  var lastFail = null;
+  var tried = 0;
+  for (var i = 0; i < candidates.length && i < MAX_MODEL_ATTEMPTS; i++) {
+    var model = candidates[i];
+    tried++;
+    var res = await attemptBatch(texts, settings, mode, model);
+    if (res.ok) {
+      recordModelOutcome(model, true);
+      return { ok: true, translations: res.translations, model: model };
+    }
+    recordModelOutcome(model, false);
+    lastFail = res;
+    if (!FALLBACK_ERRORS[res.error]) break; // با مدل دیگر هم درست نمی‌شود
+  }
+  // همه نامزدها خراب شدند، یا خطا از آن‌هایی است که جایگزینی ندارد؛
+  // fallbackExhausted یعنی پس‌زمینه همه مدل‌ها را زده و چیزی نمانده.
+  return Object.assign({}, lastFail, { model: preferred, fallbackExhausted: tried > 1 });
+}
+
+// یک تلاش با یک مدل مشخص: حالت JSON اول، بعد ساده، بعد یک بار تعمیرِ تعداد.
+async function attemptBatch(texts, settings, mode, model) {
+  var s = Object.assign({}, settings, { model: model });
   // حالت مبتدی: همان متن انگلیسی دوباره خوانده می‌شود و فارسی ساده برای
   // یک مبتدی نوشته می‌شود؛ پرامپت در تلاش دوباره و تعمیر هم همان می‌ماند.
   const prompt = mode === 'beginner' ? BEGINNER_PROMPT : SYSTEM_PROMPT;
@@ -239,9 +350,9 @@ async function translateBatch(texts, settings, mode) {
 
   // تلاش اول با حالت JSON؛ اگر درگاه قبول نکرد، ساده و بدون پارامتر اضافه دوباره می‌زنیم.
   // اگر خطا «مدل در دسترس نیست» بود، تلاش دوباره بیهوده است.
-  let res = await postChat(settings, messages, true);
+  let res = await postChat(s, messages, true);
   if (!res.ok && res.status === 400 && res.error !== 'model_unavailable') {
-    res = await postChat(settings, messages, false, true);
+    res = await postChat(s, messages, false, true);
   }
   if (!res.ok) return res;
 
@@ -249,7 +360,7 @@ async function translateBatch(texts, settings, mode) {
   if (!translations) {
     // تعداد ترجمه‌ها نخورد؛ یک بار با یادآوری دقیق دوباره می‌خواهیم.
     // این یک درخواست اضافه است، ولی از فرستادن تک‌تک رشته‌ها خیلی سریع‌تر است.
-    const repair = await postChat(settings, [
+    const repair = await postChat(s, [
       { role: 'system', content: prompt },
       { role: 'user', content: JSON.stringify({ texts }) },
       { role: 'assistant', content: res.content },

@@ -16,29 +16,35 @@ function setStatus(res) {
   var state = (res && res.state) || 'idle';
   var beginner = !!(res && res.beginner);
   var simplifying = !!(res && res.simplifying);
+  // اگر اجرا با مدلی جز مدلِ تنظیم‌شده پیش می‌رود، همان را نشان بده تا با
+  // مدلِ کارت اشتباه نشود.
+  var activeModel = (res && res.model) || '';
+  var modelNote = (activeModel && currentSettings && currentSettings.model && activeModel !== currentSettings.model)
+    ? ' (با مدل ' + activeModel + ')'
+    : '';
   statusEl.classList.toggle('done', state === 'translated');
   if (state === 'translated') {
     btn.textContent = 'برگشت به انگلیسی';
     btn.disabled = false;
     if (beginner) {
-      statusEl.textContent = 'این صفحه به زبان ساده برای مبتدی ترجمه شده است.';
+      statusEl.textContent = 'این صفحه به زبان ساده برای مبتدی ترجمه شده است.' + modelNote;
       beginnerBtn.style.display = 'none';
       restoreBtn.style.display = 'block';
     } else if (simplifying) {
-      statusEl.textContent = 'در حال ساده‌سازی برای مبتدی… پیشرفت را پایین صفحه ببین.';
+      statusEl.textContent = 'در حال ساده‌سازی برای مبتدی… پیشرفت را پایین صفحه ببین.' + modelNote;
       beginnerBtn.style.display = 'block';
       beginnerBtn.textContent = 'در حال ساده‌سازی…';
       beginnerBtn.disabled = true;
       restoreBtn.style.display = 'none';
     } else {
-      statusEl.textContent = 'این صفحه ترجمه شده است.';
+      statusEl.textContent = 'این صفحه ترجمه شده است.' + modelNote;
       beginnerBtn.style.display = 'block';
       beginnerBtn.textContent = 'ترجمه برای مبتدی';
       beginnerBtn.disabled = false;
       restoreBtn.style.display = 'none';
     }
   } else if (state === 'translating') {
-    statusEl.textContent = 'در حال ترجمه… پیشرفت را پایین صفحه ببین.';
+    statusEl.textContent = 'در حال ترجمه… پیشرفت را پایین صفحه ببین.' + modelNote;
     btn.textContent = 'در حال ترجمه…';
     btn.disabled = true;
     beginnerBtn.style.display = 'none';

@@ -45,6 +45,7 @@
   var beginnerDone = false; // بازنویسی مبتدی روی ترجمه کنونی انجام شده
   var currentRunKind = null; // 'translate' | 'simplify' — دکمه لغو بداند چه را لغو می‌کند
   var standardTitle = null; // عنوان فارسی معمولی (برای پشتیبان)
+  var activeModel = null; // مدلِ در حال کار در این اجرا؛ اگر پس‌زمینه جایگزین کرد، همین عوض می‌شود
   var beginnerTitle = null; // عنوان ساده‌شده (برای پشتیبان)
 
   // ---------- ابزارهای کوچک ----------
@@ -459,17 +460,26 @@
     return new Promise(function (resolve) { setTimeout(resolve, ms); });
   }
 
-  function translateBatchViaBackground(texts, settings, mode) {
+  function translateBatchViaBackground(texts, settings, mode, model) {
     return new Promise(function (resolve) {
       try {
         chrome.runtime.sendMessage(
-          { type: 'mirza-api-translate', texts: texts, settings: settings, mode: mode },
+          { type: 'mirza-api-translate', texts: texts, settings: settings, mode: mode, model: model || (settings && settings.model) },
           function (res) { resolve(res || { ok: false, error: 'no_response' }); }
         );
       } catch (e) {
         resolve({ ok: false, error: String(e && e.message || e) });
       }
     });
+  }
+
+  // اگر پس‌زمینه با مدل دیگری جواب داد، بقیه کار با همان مدل پیش می‌رود؛
+  // جابه‌جایی فقط یک بار خبر داده می‌شود، نه سر هر دسته.
+  function noteModelSwitch(res, sentModel) {
+    if (!res || !res.ok || !res.model || res.model === sentModel) return;
+    var switched = activeModel !== res.model;
+    activeModel = res.model;
+    if (switched) showToast('مدل «' + sentModel + '» جواب نداد؛ با «' + res.model + '» ادامه می‌دهم.');
   }
 
   function getSettings() {
@@ -507,10 +517,14 @@
     });
     if (!missing.length) return out;
 
-    var res = await translateBatchViaBackground(missing, settings, mode);
-    if (!res.ok && !res.fatal && !depth) {
+    var sentModel = activeModel || settings.model;
+    var res = await translateBatchViaBackground(missing, settings, mode, sentModel);
+    noteModelSwitch(res, sentModel);
+    if (!res.ok && !res.fatal && !depth && !res.fallbackExhausted) {
       if (res.error === 'rate_limited') await sleep(5000);
-      res = await translateBatchViaBackground(missing, settings, mode);
+      sentModel = activeModel || settings.model;
+      res = await translateBatchViaBackground(missing, settings, mode, sentModel);
+      noteModelSwitch(res, sentModel);
     }
     if (res.ok && res.translations) {
       missing.forEach(function (t, k) {
@@ -522,6 +536,11 @@
     }
     if (res && res.fatal) {
       fatalError = res.errorText || 'مدل در دسترس نیست.';
+      return out;
+    }
+    if (res && res.fallbackExhausted && res.error === 'timeout') {
+      // هیچ مدلی جواب نداد و درگاه ساکت است؛ بقیه دسته‌ها هم همان می‌شوند.
+      fatalError = res.errorText || 'درگاه جواب نمی‌دهد.';
       return out;
     }
     if (res && res.errorText) lastTranslateError = res.errorText;
@@ -547,13 +566,17 @@
     async function singleWorker() {
       while (si < missing.length && !fatalError) {
         var k = si++;
-        var one = await translateBatchViaBackground([missing[k]], settings, mode);
+        var sent = activeModel || settings.model;
+        var one = await translateBatchViaBackground([missing[k]], settings, mode, sent);
+        noteModelSwitch(one, sent);
         if (one.ok && one.translations && one.translations[0]) {
           cache[cacheKey(missing[k], mode)] = one.translations[0];
           singleResults[k] = one.translations[0];
           cacheDirty = true;
         } else if (one && one.fatal) {
           fatalError = one.errorText || 'مدل در دسترس نیست.';
+        } else if (one && one.fallbackExhausted && one.error === 'timeout') {
+          fatalError = one.errorText || 'درگاه جواب نمی‌دهد.';
         } else if (one && one.error === 'rate_limited') {
           // درگاه شلوغ شد؛ بقیه تک‌ها را نمی‌زنیم تا آرام شود.
           si = missing.length;
@@ -616,8 +639,10 @@
   function translateTitle(settings, myRun) {
     if (!document.title || !document.title.trim() || originalTitle !== null) return;
     originalTitle = document.title;
-    translateBatchViaBackground([document.title.trim()], settings).then(function (res) {
+    var sentTitleModel = activeModel || settings.model;
+    translateBatchViaBackground([document.title.trim()], settings, null, sentTitleModel).then(function (res) {
       if (myRun === runId && res.ok && res.translations && res.translations[0]) {
+        noteModelSwitch(res, sentTitleModel);
         standardTitle = res.translations[0];
         document.title = res.translations[0];
       }
@@ -649,6 +674,7 @@
     var myRun = ++runId;
     currentRunKind = 'translate';
     beginnerDone = false;
+    activeModel = settings.model;
     standardTitle = null;
     beginnerTitle = null;
     lastTranslateError = null;
@@ -785,6 +811,9 @@
       showToast('کلید API را در تنظیمات افزونه بگذار؛ بعد دوباره بزن.');
       return;
     }
+    // مدلِ در حال کار از ترجمه می‌ماند؛ اگر ترجمه با جایگزین تمام شده بود،
+    // ساده‌سازی با همان مدلِ سالم پیش می‌رود، نه با مدلِ خرابِ اول.
+    if (!activeModel) activeModel = settings.model;
     var myRun = ++runId;
     currentRunKind = 'simplify';
     lastTranslateError = null;
@@ -834,8 +863,10 @@
           beginnerTitle = cache[titleKey];
           document.title = cache[titleKey];
         } else {
-          translateBatchViaBackground([currentTitle], settings, 'beginner').then(function (res) {
+          var sentTitleModel = activeModel || settings.model;
+          translateBatchViaBackground([currentTitle], settings, 'beginner', sentTitleModel).then(function (res) {
             if (myRun === runId && res.ok && res.translations && res.translations[0]) {
+              noteModelSwitch(res, sentTitleModel);
               cache[titleKey] = res.translations[0];
               beginnerTitle = res.translations[0];
               document.title = res.translations[0];
@@ -876,6 +907,7 @@
     runId++;
     currentRunKind = null;
     beginnerDone = false;
+    activeModel = null;
     standardTitle = null;
     beginnerTitle = null;
     removeProgressBar();
@@ -944,7 +976,7 @@
       // اسکریپت تازه را تزریق کند و جواب او برسد؛ وگرنه جواب کهنه همیشه
       // زودتر می‌رسد و جلوی تازه را می‌گیرد.
       try {
-        sendResponse({ ok: true, state: state, version: chrome.runtime.getManifest().version, error: fatalError || lastTranslateError, beginner: beginnerDone, simplifying: currentRunKind === 'simplify' });
+        sendResponse({ ok: true, state: state, version: chrome.runtime.getManifest().version, error: fatalError || lastTranslateError, beginner: beginnerDone, simplifying: currentRunKind === 'simplify', model: activeModel || null });
       } catch (_e) {
         // عمداً بدون sendResponse
       }
