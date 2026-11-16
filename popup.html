@@ -15,10 +15,12 @@
 
   <div id="status" class="pill">…</div>
 
-  <button id="translateBtn" class="btn btn-primary" type="button">ترجمه صفحه</button>
+  <div class="actions">
+    <button id="translateBtn" class="btn btn-primary" type="button">ترجمه صفحه</button>
 
-  <button id="beginnerBtn" class="btn btn-gold" type="button" style="display:none;">ترجمه برای مبتدی</button>
-  <button id="restoreBtn" class="btn btn-ghost btn-block" type="button" style="display:none;">بازگشت به ترجمه معمولی</button>
+    <button id="beginnerBtn" class="btn btn-gold" type="button" style="display:none;">ترجمه برای مبتدی</button>
+    <button id="restoreBtn" class="btn btn-ghost btn-block" type="button" style="display:none;">بازگشت به ترجمه معمولی</button>
+  </div>
 
   <div class="card model-card" id="modelBox">
     <div class="model-current">
@@ -44,7 +46,7 @@
     <button id="recheckBtn" class="btn btn-ghost btn-small" type="button">بررسی دوباره</button>
   </div>
 
-  <a id="optionsLink" class="link">تنظیمات و کلید API</a>
+  <a id="optionsLink" class="link" role="button" tabindex="0">تنظیمات و کلید API</a>
 
   <div id="error"></div>
   <script src="popup.js"></script>

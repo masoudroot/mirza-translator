@@ -197,6 +197,9 @@ chrome.tabs.query({ active: true, currentWindow: true }, function (tabs) {
 document.getElementById('optionsLink').addEventListener('click', function () {
   chrome.runtime.openOptionsPage();
 });
+document.getElementById('optionsLink').addEventListener('keydown', function (e) {
+  if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); this.click(); }
+});
 
 // ---------- به‌روزرسانی ----------
 var updateStatusEl = document.getElementById('updateStatus');
@@ -280,6 +283,7 @@ function renderPopupModels() {
     if (q && id.toLowerCase().indexOf(q) === -1) return;
     var li = document.createElement('li');
     li.textContent = id;
+    li.tabIndex = 0;
     if (id === selected) li.classList.add('selected');
     li.addEventListener('click', function () {
       if (!currentSettings) return;
@@ -289,6 +293,9 @@ function renderPopupModels() {
         renderPopupModels();
         modelMsg('مدل عوض شد: ' + id);
       });
+    });
+    li.addEventListener('keydown', function (e) {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); li.click(); }
     });
     modelItemsEl.appendChild(li);
     shown++;

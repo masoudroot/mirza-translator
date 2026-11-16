@@ -42,6 +42,7 @@ function markPreset(provider) {
   currentProvider = provider;
   presetBtns.forEach(function (b) {
     b.classList.toggle('active', b.dataset.provider === provider);
+    b.setAttribute('aria-pressed', b.dataset.provider === provider ? 'true' : 'false');
   });
   var hintEl = document.getElementById('providerHint');
   if (hintEl) hintEl.textContent = PROVIDER_HINTS[provider] || '';
@@ -89,11 +90,15 @@ function renderModelList() {
     if (q && id.toLowerCase().indexOf(q) === -1) return;
     var li = document.createElement('li');
     li.textContent = id;
+    li.tabIndex = 0;
     if (id === selected) li.classList.add('selected');
     li.addEventListener('click', function () {
       modelEl.value = id;
       renderModelList();
       showMessage('مدل «' + id + '» انتخاب شد؛ ذخیره بزن تا ثبت شود.', true);
+    });
+    li.addEventListener('keydown', function (e) {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); li.click(); }
     });
     modelItemsEl.appendChild(li);
     shown++;

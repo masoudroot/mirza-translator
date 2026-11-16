@@ -1,10 +1,11 @@
 /* translator.css — نوار پیشرفت و پیام مترجم میرزا
    فونت وزیرمتن از خود افزونه می‌آید (content.js آن را با @font-face تزریق می‌کند)؛
-   اگر فونت در دسترس نبود، تاهوما جایگزین می‌شود. */
+   اگر فونت در دسترس نبود، تاهوما جایگزین می‌شود.
+   همان مقیاس ui.css: فاصله روی شبکه ۴ پیکسل، تایپ ۱۲/۱۴، گوشه ۱۴ پیکسل. */
 
 #mirza-progress {
   position: fixed;
-  bottom: 18px;
+  bottom: 16px;
   left: 50%;
   transform: translateX(-50%);
   z-index: 2147483647;
@@ -14,16 +15,19 @@
   border-radius: 14px;
   padding: 12px 16px;
   font-family: Vazirmatn, Tahoma, sans-serif;
-  font-size: 13px;
+  font-size: 14px;
+  line-height: 1.8;
   direction: rtl;
   box-shadow: 0 8px 28px rgba(0, 0, 0, 0.18);
-  min-width: 300px;
+  min-width: 280px;
   max-width: 90vw;
 }
 
 #mirza-progress .mirza-progress-inner {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
+  justify-content: space-between;
   gap: 12px;
 }
 
@@ -34,7 +38,7 @@
 }
 
 #mirza-progress .mirza-progress-track {
-  flex: 1;
+  flex: 1 1 100%;
   height: 8px;
   background: #F0EBDD;
   border-radius: 4px;
@@ -54,27 +58,34 @@
   border: 1px solid #104C46;
   color: #104C46;
   border-radius: 8px;
-  padding: 4px 12px;
+  min-height: 44px;
+  padding: 0 12px;
   font-family: Vazirmatn, Tahoma, sans-serif;
   font-size: 12px;
   font-weight: 700;
+  line-height: 1.5;
   cursor: pointer;
 }
 
 #mirza-toast {
   position: fixed;
-  bottom: 18px;
+  bottom: 16px;
   left: 50%;
   transform: translateX(-50%);
   z-index: 2147483647;
   background: #104C46;
   color: #fff;
-  border-radius: 12px;
-  padding: 12px 18px;
+  border-radius: 14px;
+  padding: 12px 16px;
   font-family: Vazirmatn, Tahoma, sans-serif;
-  font-size: 13px;
+  font-size: 14px;
+  line-height: 1.8;
   direction: rtl;
   box-shadow: 0 8px 28px rgba(0, 0, 0, 0.25);
   max-width: 90vw;
   text-align: center;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  #mirza-progress .mirza-progress-fill { transition: none; }
 }
