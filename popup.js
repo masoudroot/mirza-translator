@@ -4,7 +4,12 @@ var btn = document.getElementById('translateBtn');
 var statusEl = document.getElementById('status');
 var errorEl = document.getElementById('error');
 
+try {
+  document.getElementById('verBadge').textContent = 'نسخه ' + chrome.runtime.getManifest().version;
+} catch (_e) {}
+
 function setStatus(state) {
+  statusEl.classList.toggle('done', state === 'translated');
   if (state === 'translated') {
     statusEl.textContent = 'این صفحه ترجمه شده است.';
     btn.textContent = 'برگشت به انگلیسی';

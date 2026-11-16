@@ -146,6 +146,16 @@ testBtn.addEventListener('click', function () {
 
 loadSettings();
 
+// ---------- نمایش و پنهان کردن کلید ----------
+var toggleKeyBtn = document.getElementById('toggleKeyBtn');
+if (toggleKeyBtn) {
+  toggleKeyBtn.addEventListener('click', function () {
+    var show = apiKeyEl.type === 'password';
+    apiKeyEl.type = show ? 'text' : 'password';
+    toggleKeyBtn.textContent = show ? 'پنهان' : 'نمایش';
+  });
+}
+
 // ---------- آزمایش میزبان به‌روزرسان ----------
 var hostTestBtn = document.getElementById('hostTestBtn');
 var hostMessageEl = document.getElementById('hostMessage');

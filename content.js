@@ -1,6 +1,10 @@
 // content.js — قلب مترجم میرزا
-// قانون طلایی: فقط nodeValue گره‌های متنی عوض می‌شود. هرگز innerHTML، هرگز ساختار.
-// برای همین دکمه‌ها، اسکریپت‌ها و چیدمان صفحه زنده می‌مانند.
+// قانون طلایی: فقط nodeValue گره‌های متنی و چند ویژگی متنی (alt ،title ،placeholder) عوض می‌شود.
+// هرگز innerHTML، هرگز ساختار. برای همین دکمه‌ها، اسکریپت‌ها و چیدمان صفحه زنده می‌مانند.
+//
+// کامل بودن: بخش‌های پنهان صفحه (زبانه، آکاردئون، منوی بسته) هم ترجمه می‌شوند؛
+// فقط محتوایی که با hidden یا aria-hidden پنهان شده و کدها کنار می‌مانند.
+// اگر یک دسته خراب شد، همان رشته‌ها تک‌تک ترجمه می‌شوند تا چیزی جا نماند.
 
 (function () {
   'use strict';
@@ -11,14 +15,17 @@
     SVG: 1, CANVAS: 1, VIDEO: 1, AUDIO: 1, TEMPLATE: 1
   };
 
-  var MAX_ITEMS_PER_BATCH = 10;
-  var MAX_CHARS_PER_BATCH = 1500;
-  var PARALLEL_WORKERS = 3;
+  var ATTR_NAMES = ['alt', 'title', 'placeholder'];
+
+  var MAX_ITEMS_PER_BATCH = 20;
+  var MAX_CHARS_PER_BATCH = 4000;
+  var PARALLEL_WORKERS = 5;
   var MIN_TEXT_LENGTH = 2;
 
   var state = 'idle'; // idle | translating | translated
   var runId = 0;
   var translatedNodes = []; // [{node, original}]
+  var translatedAttrs = []; // [{el, attr, original}]
   var originalTitle = null;
   var observer = null;
   var observerTimer = null;
@@ -34,12 +41,10 @@
     return 'h' + h.toString(36);
   }
 
-  function isVisible(el) {
-    if (!el || el.nodeType !== 1) return false;
-    if (el.closest('[hidden]')) return false;
-    var cs = window.getComputedStyle(el);
-    if (cs.display === 'none' || cs.visibility === 'hidden' || cs.visibility === 'collapse') return false;
-    return el.getClientRects().length > 0;
+  function isTranslatableText(text) {
+    if (!text || text.trim().length < MIN_TEXT_LENGTH) return false;
+    if (/^[\d\s.,;:!?()«»""''\-–—\/\\|@#%_+=*~`^$&<>]+$/.test(text.trim())) return false; // فقط عدد و نشانه
+    return true;
   }
 
   function priorityOf(el) {
@@ -84,19 +89,34 @@
           var parent = node.parentElement;
           if (!parent) return NodeFilter.FILTER_REJECT;
           if (SKIP_TAGS[parent.tagName]) return NodeFilter.FILTER_REJECT;
-          if (parent.closest('[aria-hidden="true"]')) return NodeFilter.FILTER_REJECT;
-          var text = node.nodeValue;
-          if (!text || text.trim().length < MIN_TEXT_LENGTH) return NodeFilter.FILTER_REJECT;
-          if (/^[\d\s.,;:!?()«»""''\-–—\/\\|@#%_+=*~`^$&<>]+$/.test(text.trim())) {
-            return NodeFilter.FILTER_REJECT; // فقط عدد و نشانه؛ ترجمه ندارد
-          }
-          if (!isVisible(parent)) return NodeFilter.FILTER_REJECT;
+          if (parent.closest('[hidden], [aria-hidden="true"]')) return NodeFilter.FILTER_REJECT;
+          if (!isTranslatableText(node.nodeValue)) return NodeFilter.FILTER_REJECT;
+          // دیده شدن ملاک نیست: بخش پنهان با CSS (زبانه، آکاردئون) هم ترجمه می‌شود
+          // تا وقتی باز شد فارسی باشد.
           return NodeFilter.FILTER_ACCEPT;
         }
       }
     );
     var node;
     while ((node = walker.nextNode())) out.push(node);
+    return out;
+  }
+
+  function collectAttributes(root) {
+    var out = [];
+    var scope = root || document.body;
+    if (!scope.querySelectorAll) return out;
+    var els = scope.querySelectorAll('[alt], [title], [placeholder]');
+    els.forEach(function (el) {
+      // ویژگی روی خود عنصر است؛ INPUT و TEXTAREA هم placeholder دارند، پس رد برچسبی نیست.
+      if (el.closest('[hidden], [aria-hidden="true"]')) return;
+      ATTR_NAMES.forEach(function (name) {
+        var v = el.getAttribute(name);
+        if (!isTranslatableText(v)) return;
+        if (/^(https?:\/\/|www\.|mailto:|tel:)/i.test(v.trim())) return; // نشانی؛ ترجمه ندارد
+        out.push({ el: el, attr: name, text: v.trim() });
+      });
+    });
     return out;
   }
 
@@ -130,7 +150,32 @@
       chars += entry.text.length;
     });
     if (current.length) batches.push(current);
-    return { batches: batches, byText: byText };
+    return batches;
+  }
+
+  function buildAttrBatches(attrs) {
+    var byText = new Map();
+    attrs.forEach(function (item) {
+      if (!byText.has(item.text)) {
+        byText.set(item.text, { text: item.text, targets: [], priority: 2 });
+      }
+      byText.get(item.text).targets.push({ el: item.el, attr: item.attr });
+    });
+    var entries = Array.from(byText.values());
+    var batches = [];
+    var current = [];
+    var chars = 0;
+    entries.forEach(function (entry) {
+      if (current.length >= MAX_ITEMS_PER_BATCH || chars + entry.text.length > MAX_CHARS_PER_BATCH) {
+        if (current.length) batches.push(current);
+        current = [];
+        chars = 0;
+      }
+      current.push(entry);
+      chars += entry.text.length;
+    });
+    if (current.length) batches.push(current);
+    return batches;
   }
 
   // ---------- جایگذاری ----------
@@ -146,24 +191,40 @@
     });
   }
 
+  function applyAttrTranslation(entry, translated) {
+    entry.targets.forEach(function (t) {
+      if (!t.el.isConnected) return;
+      translatedAttrs.push({ el: t.el, attr: t.attr, original: t.el.getAttribute(t.attr) });
+      t.el.setAttribute(t.attr, translated);
+    });
+  }
+
   // ---------- راست‌چین و فونت ----------
 
   function enableRtl() {
     if (document.getElementById('mirza-rtl-style')) return;
-    var link = document.createElement('link');
-    link.id = 'mirza-font-link';
-    link.rel = 'stylesheet';
-    link.href = 'https://fonts.googleapis.com/css2?family=Vazirmatn:wght@400;700&display=swap';
-    document.head.appendChild(link);
-    var style = document.createElement('style');
-    style.id = 'mirza-rtl-style';
-    style.textContent = [
+    var fontUrl = function (f) {
+      try { return chrome.runtime.getURL('fonts/' + f); } catch (_e) { return ''; }
+    };
+    var arabic = fontUrl('vazirmatn-arabic.woff2');
+    var latin = fontUrl('vazirmatn-latin.woff2');
+    var css = [];
+    if (arabic) {
+      css.push('@font-face{font-family:Vazirmatn;font-weight:100 900;font-display:swap;src:url(' + arabic + ') format("woff2");unicode-range:U+0600-06FF,U+200C-200E,U+2010-2011,U+204F,U+2E41,U+FB50-FDFF,U+FE80-FEFC;}');
+    }
+    if (latin) {
+      css.push('@font-face{font-family:Vazirmatn;font-weight:100 900;font-display:swap;src:url(' + latin + ') format("woff2");unicode-range:U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD;}');
+    }
+    css.push([
       'html[dir="rtl"] body, html[dir="rtl"] p, html[dir="rtl"] h1, html[dir="rtl"] h2,',
       'html[dir="rtl"] h3, html[dir="rtl"] h4, html[dir="rtl"] h5, html[dir="rtl"] h6,',
       'html[dir="rtl"] li, html[dir="rtl"] a, html[dir="rtl"] span, html[dir="rtl"] div {',
       '  font-family: Vazirmatn, Tahoma, sans-serif !important;',
       '}'
-    ].join('\n');
+    ].join('\n'));
+    var style = document.createElement('style');
+    style.id = 'mirza-rtl-style';
+    style.textContent = css.join('\n');
     document.head.appendChild(style);
     document.documentElement.setAttribute('dir', 'rtl');
     document.documentElement.setAttribute('lang', 'fa');
@@ -172,8 +233,6 @@
   function disableRtl() {
     var style = document.getElementById('mirza-rtl-style');
     if (style) style.remove();
-    var link = document.getElementById('mirza-font-link');
-    if (link) link.remove();
     document.documentElement.removeAttribute('dir');
     document.documentElement.removeAttribute('lang');
   }
@@ -225,7 +284,7 @@
     setTimeout(function () { if (toast.isConnected) toast.remove(); }, 5000);
   }
 
-  // ---------- ترجمه یک دسته ----------
+  // ---------- حرف زدن با پس‌زمینه ----------
 
   function translateBatchViaBackground(texts, settings) {
     return new Promise(function (resolve) {
@@ -252,6 +311,82 @@
     });
   }
 
+  // ترجمه چند رشته با کش، یک بار تلاش دوباره، و بازگشت تک‌تک اگر دسته خراب شد.
+  // خروجی آرایه‌ای هم‌طول ورودی است؛ جای رشته‌های ناموفق null می‌ماند.
+  async function translateTexts(texts, settings) {
+    var out = new Array(texts.length).fill(null);
+    var missing = [];
+    var missingIdx = [];
+    texts.forEach(function (t, i) {
+      var hit = cache[hashText(t)];
+      if (hit) out[i] = hit;
+      else { missing.push(t); missingIdx.push(i); }
+    });
+    if (!missing.length) return out;
+
+    var res = await translateBatchViaBackground(missing, settings);
+    if (!res.ok) res = await translateBatchViaBackground(missing, settings);
+    if (res.ok && res.translations) {
+      missing.forEach(function (t, k) {
+        cache[hashText(t)] = res.translations[k];
+        out[missingIdx[k]] = res.translations[k];
+      });
+      cacheDirty = true;
+      return out;
+    }
+
+    // دسته خراب شد (مثلاً تعداد ترجمه‌ها نخورد)؛ هر رشته جدا ترجمه می‌شود
+    for (var k = 0; k < missing.length; k++) {
+      var one = await translateBatchViaBackground([missing[k]], settings);
+      if (one.ok && one.translations && one.translations[0]) {
+        cache[hashText(missing[k])] = one.translations[0];
+        out[missingIdx[k]] = one.translations[0];
+        cacheDirty = true;
+      }
+    }
+    return out;
+  }
+
+  // اجرای دسته‌ها با چند کارگر موازی؛ پس از هر دسته onBatchDone صدا می‌خورد.
+  async function runBatches(batches, settings, myRun, applyEntry, onBatchDone, onFirstApplied) {
+    var failed = 0;
+    var firstDone = false;
+    var queue = batches.slice();
+    var workers = [];
+    for (var w = 0; w < PARALLEL_WORKERS; w++) {
+      workers.push((async function worker() {
+        while (queue.length && myRun === runId) {
+          var batch = queue.shift();
+          var texts = batch.map(function (e) { return e.text; });
+          var results = await translateTexts(texts, settings);
+          if (myRun !== runId) return; // لغو شده؛ نتیجه را دور بریز
+          var appliedAny = false;
+          batch.forEach(function (entry, i) {
+            if (results[i]) { applyEntry(entry, results[i]); appliedAny = true; }
+            else failed++;
+          });
+          if (appliedAny && !firstDone) {
+            firstDone = true;
+            if (onFirstApplied) onFirstApplied();
+          }
+          if (onBatchDone) onBatchDone();
+        }
+      })());
+    }
+    await Promise.all(workers);
+    return { failed: failed };
+  }
+
+  function translateTitle(settings, myRun) {
+    if (!document.title || !document.title.trim() || originalTitle !== null) return;
+    originalTitle = document.title;
+    translateBatchViaBackground([document.title.trim()], settings).then(function (res) {
+      if (myRun === runId && res.ok && res.translations && res.translations[0]) {
+        document.title = res.translations[0];
+      }
+    });
+  }
+
   // ---------- جریان اصلی ----------
 
   async function translatePage() {
@@ -270,93 +405,48 @@
     await loadCache();
 
     var nodes = collectTextNodes(document.body);
-    if (!nodes.length) {
+    var attrs = collectAttributes(document.body);
+    if (!nodes.length && !attrs.length) {
       state = 'idle';
       showToast('متن قابل ترجمه‌ای در این صفحه پیدا نشد.');
       return;
     }
 
-    var built = buildBatches(nodes);
-    var batches = built.batches;
-    var byText = built.byText;
+    var textBatches = buildBatches(nodes);
+    var attrBatches = buildAttrBatches(attrs);
+    var totalBatches = textBatches.length + attrBatches.length;
+    var doneBatches = 0;
+    var failedTotal = 0;
+    var onBatchDone = function () { doneBatches++; updateProgress(doneBatches, totalBatches); };
+    var rtlOn = false;
+    var onFirstApplied = function () {
+      rtlOn = true;
+      enableRtl();
+      translateTitle(settings, myRun);
+    };
 
     ensureProgressBar();
-    var done = 0;
-    var failed = 0;
-    var firstApplied = false;
+    updateProgress(0, totalBatches);
 
-    var queue = batches.slice();
-    var workers = [];
-    for (var w = 0; w < PARALLEL_WORKERS; w++) {
-      workers.push((async function worker() {
-        while (queue.length && myRun === runId) {
-          var batch = queue.shift();
-          var texts = batch.map(function (e) { return e.text; });
-
-          // اول از کش بردار
-          var missing = [];
-          var missingIdx = [];
-          var cached = {};
-          texts.forEach(function (t, i) {
-            var hit = cache[hashText(t)];
-            if (hit) cached[i] = hit;
-            else { missing.push(t); missingIdx.push(i); }
-          });
-
-          var fresh = null;
-          if (missing.length) {
-            var res = await translateBatchViaBackground(missing, settings);
-            if (!res.ok) {
-              // یک بار دیگر، فقط همان دسته
-              res = await translateBatchViaBackground(missing, settings);
-            }
-            if (res.ok) fresh = res.translations;
-          }
-
-          if (myRun !== runId) return; // لغو شده؛ نتیجه را دور بریز
-
-          if (missing.length && !fresh) {
-            failed += missing.length;
-          } else if (fresh) {
-            missing.forEach(function (t, k) {
-              cache[hashText(t)] = fresh[k];
-            });
-            cacheDirty = true;
-          }
-
-          batch.forEach(function (entry, i) {
-            var tr = cached[i] || (fresh ? fresh[missingIdx.indexOf(i)] : null);
-            if (tr) applyTranslation(entry, tr);
-          });
-
-          if (!firstApplied && translatedNodes.length) {
-            firstApplied = true;
-            enableRtl();
-            if (document.title && document.title.trim()) {
-              originalTitle = document.title;
-              var titleRes = await translateBatchViaBackground([document.title.trim()], settings);
-              if (myRun === runId && titleRes.ok && titleRes.translations[0]) {
-                document.title = titleRes.translations[0];
-              }
-            }
-          }
-
-          done++;
-          updateProgress(done, batches.length);
-        }
-      })());
-    }
-    await Promise.all(workers);
+    var r1 = await runBatches(textBatches, settings, myRun, applyTranslation, onBatchDone, onFirstApplied);
     if (myRun !== runId) return; // لغو شده بود
+    failedTotal += r1.failed;
+
+    var r2 = await runBatches(attrBatches, settings, myRun, applyAttrTranslation, onBatchDone, null);
+    if (myRun !== runId) return;
+    failedTotal += r2.failed;
+
+    // صفحه‌ای که فقط ویژگی متنی دارد و متن ندارد: راست‌چین و عنوان این‌جا می‌آید
+    if (!rtlOn && (translatedNodes.length || translatedAttrs.length)) onFirstApplied();
 
     saveCache();
     removeProgressBar();
-    if (translatedNodes.length) {
+    if (translatedNodes.length || translatedAttrs.length) {
       state = 'translated';
       startObserver(settings);
       showToast(
-        failed > 0
-          ? 'ترجمه تمام شد؛ ' + failed + ' جمله ترجمه نشد. یک بار دیگر بزن تا همان‌ها را بگیرد.'
+        failedTotal > 0
+          ? 'ترجمه تمام شد؛ ' + failedTotal + ' جمله ترجمه نشد. اتصال را بررسی کن و دوباره بزن.'
           : 'ترجمه تمام شد. برای برگشت به انگلیسی، دوباره روی دکمه بزن.'
       );
     } else {
@@ -371,6 +461,10 @@
       if (item.node.isConnected) item.node.nodeValue = item.original;
     });
     translatedNodes = [];
+    translatedAttrs.forEach(function (item) {
+      if (item.el.isConnected) item.el.setAttribute(item.attr, item.original);
+    });
+    translatedAttrs = [];
     if (originalTitle !== null) { document.title = originalTitle; originalTitle = null; }
     disableRtl();
     stopObserver();
@@ -396,23 +490,13 @@
 
   async function translateNewNodes(settings) {
     if (state !== 'translated') return;
+    var myRun = runId;
     var nodes = collectTextNodes(document.body).filter(function (node) {
       return !translatedNodes.some(function (item) { return item.node === node; });
     });
     if (!nodes.length) return;
-    var built = buildBatches(nodes);
-    for (var i = 0; i < built.batches.length; i++) {
-      var batch = built.batches[i];
-      var texts = batch.map(function (e) { return e.text; });
-      var res = await translateBatchViaBackground(texts, settings);
-      if (res.ok) {
-        batch.forEach(function (entry, k) {
-          cache[hashText(entry.text)] = res.translations[k];
-          applyTranslation(entry, res.translations[k]);
-        });
-        cacheDirty = true;
-      }
-    }
+    var batches = buildBatches(nodes);
+    await runBatches(batches, settings, myRun, applyTranslation, null, null);
     saveCache();
   }
 
