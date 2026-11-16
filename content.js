@@ -51,12 +51,6 @@
     return true;
   }
 
-  function priorityOf(el) {
-    if (el.closest('article, main, [role="main"], .post-content, .entry-content, .article-body')) return 0;
-    if (el.closest('header, nav, footer, aside, .sidebar, .menu, .nav')) return 2;
-    return 1;
-  }
-
   function loadCache() {
     return new Promise(function (resolve) {
       if (cacheLoaded) return resolve();
@@ -126,20 +120,19 @@
 
   // ---------- دسته‌بندی ----------
 
+  // دسته‌ها دقیقاً به ترتیب سند ساخته می‌شوند؛ هیچ مرتب‌سازی اولویت‌داری نیست
+  // تا ترجمه از بالای صفحه به پایین بیاید.
   function buildBatches(nodes) {
     var byText = new Map();
     nodes.forEach(function (node) {
       var trimmed = node.nodeValue.trim();
       if (!byText.has(trimmed)) {
-        byText.set(trimmed, { text: trimmed, nodes: [], priority: priorityOf(node.parentElement) });
+        byText.set(trimmed, { text: trimmed, nodes: [] });
       }
-      var entry = byText.get(trimmed);
-      entry.nodes.push(node);
-      entry.priority = Math.min(entry.priority, priorityOf(node.parentElement));
+      byText.get(trimmed).nodes.push(node);
     });
 
     var entries = Array.from(byText.values());
-    entries.sort(function (a, b) { return a.priority - b.priority; });
 
     var batches = [];
     var current = [];
@@ -161,7 +154,7 @@
     var byText = new Map();
     attrs.forEach(function (item) {
       if (!byText.has(item.text)) {
-        byText.set(item.text, { text: item.text, targets: [], priority: 2 });
+        byText.set(item.text, { text: item.text, targets: [] });
       }
       byText.get(item.text).targets.push({ el: item.el, attr: item.attr });
     });
@@ -339,43 +332,63 @@
       return out;
     }
 
-    // دسته خراب شد (مثلاً تعداد ترجمه‌ها نخورد)؛ هر رشته جدا ترجمه می‌شود
-    for (var k = 0; k < missing.length; k++) {
-      var one = await translateBatchViaBackground([missing[k]], settings);
-      if (one.ok && one.translations && one.translations[0]) {
-        cache[hashText(missing[k])] = one.translations[0];
-        out[missingIdx[k]] = one.translations[0];
-        cacheDirty = true;
+    // دسته خراب شد (مثلاً تعداد ترجمه‌ها نخورد)؛ هر رشته جدا ترجمه می‌شود،
+    // موازی تا چیزی جا نماند و کند نشود.
+    var singleResults = new Array(missing.length).fill(null);
+    var si = 0;
+    async function singleWorker() {
+      while (si < missing.length) {
+        var k = si++;
+        var one = await translateBatchViaBackground([missing[k]], settings);
+        if (one.ok && one.translations && one.translations[0]) {
+          cache[hashText(missing[k])] = one.translations[0];
+          singleResults[k] = one.translations[0];
+          cacheDirty = true;
+        }
       }
     }
+    var singleWorkers = [];
+    var n = Math.min(PARALLEL_WORKERS, missing.length);
+    for (var s = 0; s < n; s++) singleWorkers.push(singleWorker());
+    await Promise.all(singleWorkers);
+    missing.forEach(function (t, k) {
+      if (singleResults[k]) out[missingIdx[k]] = singleResults[k];
+    });
     return out;
   }
 
-  // اجرای دسته‌ها با چند کارگر موازی؛ پس از هر دسته onBatchDone صدا می‌خورد.
+  // اجرای دسته‌ها: گرفتن موازی، ولی جایگذاری دقیقاً به ترتیب دسته‌ها تا ترجمه
+  // از بالای صفحه به پایین بیاید و وسط صفحه زودتر ننشیند.
   async function runBatches(batches, settings, myRun, applyEntry, onBatchDone, onFirstApplied) {
     var failed = 0;
     var firstDone = false;
-    var queue = batches.slice();
+    var slots = new Array(batches.length);
+    var next = 0;
     var workers = [];
     for (var w = 0; w < PARALLEL_WORKERS; w++) {
       workers.push((async function worker() {
-        while (queue.length && myRun === runId) {
-          var batch = queue.shift();
-          var texts = batch.map(function (e) { return e.text; });
-          var results = await translateTexts(texts, settings);
-          if (myRun !== runId) return; // لغو شده؛ نتیجه را دور بریز
-          var appliedAny = false;
-          batch.forEach(function (entry, i) {
-            if (results[i]) { applyEntry(entry, results[i]); appliedAny = true; }
-            else failed++;
-          });
-          if (appliedAny && !firstDone) {
-            firstDone = true;
-            if (onFirstApplied) onFirstApplied();
-          }
-          if (onBatchDone) onBatchDone();
+        while (myRun === runId) {
+          var idx = next++;
+          if (idx >= batches.length) break;
+          slots[idx] = translateTexts(batches[idx].map(function (e) { return e.text; }), settings);
+          try { await slots[idx]; } catch (_e) { /* translateTexts همیشه آرایه برمی‌گرداند */ }
         }
       })());
+    }
+    for (var i = 0; i < batches.length; i++) {
+      if (myRun !== runId) break;
+      if (!slots[i]) break; // لغو شده پیش از شروع این دسته
+      var results = (await slots[i]) || [];
+      var appliedAny = false;
+      batches[i].forEach(function (entry, k) {
+        if (results[k]) { applyEntry(entry, results[k]); appliedAny = true; }
+        else failed++;
+      });
+      if (appliedAny && !firstDone) {
+        firstDone = true;
+        if (onFirstApplied) onFirstApplied();
+      }
+      if (onBatchDone) onBatchDone();
     }
     await Promise.all(workers);
     return { failed: failed };

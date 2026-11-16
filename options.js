@@ -3,7 +3,13 @@
 var PRESETS = {
   dotdotagent: { baseUrl: 'https://api.samp.team/v1', model: 'deepseek-v4.1-flash' },
   reformboss: { baseUrl: 'https://api.reformboss.com/v1', model: 'deepseek-v4.1-flash-1017' },
+  gemini: { baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai', model: 'gemini-2.5-flash' },
   custom: { baseUrl: '', model: '' }
+};
+
+// گوگل درگاه سازگار با OpenAI دارد؛ همان آدرس پایه و کلید Gemini کافی است.
+var PROVIDER_HINTS = {
+  gemini: 'کلید Gemini را از Google AI Studio بگیر (aistudio.google.com)؛ رایگان است. مدل‌های دیگرش: gemini-2.5-flash-lite و gemini-2.0-flash.'
 };
 
 var baseUrlEl = document.getElementById('baseUrl');
@@ -28,6 +34,8 @@ function markPreset(provider) {
   presetBtns.forEach(function (b) {
     b.classList.toggle('active', b.dataset.provider === provider);
   });
+  var hintEl = document.getElementById('providerHint');
+  if (hintEl) hintEl.textContent = PROVIDER_HINTS[provider] || '';
 }
 
 function readForm() {

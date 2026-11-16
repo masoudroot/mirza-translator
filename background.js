@@ -137,7 +137,18 @@ async function translateBatch(texts, settings) {
   }
   if (!res.ok) return { ok: false, error: res.error || 'request_failed' };
 
-  const translations = parseTranslations(res.content, texts.length);
+  let translations = parseTranslations(res.content, texts.length);
+  if (!translations) {
+    // تعداد ترجمه‌ها نخورد؛ یک بار با یادآوری دقیق دوباره می‌خواهیم.
+    // این یک درخواست اضافه است، ولی از فرستادن تک‌تک رشته‌ها خیلی سریع‌تر است.
+    const repair = await postChat(settings, [
+      { role: 'system', content: SYSTEM_PROMPT },
+      { role: 'user', content: JSON.stringify({ texts }) },
+      { role: 'assistant', content: res.content },
+      { role: 'user', content: 'Your reply had the wrong number of translations. Reply again with exactly ' + texts.length + ' translations, one per input string, in the same order, as {"translations": [...]}.' }
+    ], true);
+    if (repair.ok) translations = parseTranslations(repair.content, texts.length);
+  }
   if (!translations) return { ok: false, error: 'bad_response' };
   return { ok: true, translations };
 }
