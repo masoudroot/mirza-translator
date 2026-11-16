@@ -17,6 +17,23 @@
 
   <button id="translateBtn" class="btn btn-primary" type="button">ترجمه صفحه</button>
 
+  <div class="card model-card" id="modelBox">
+    <div class="model-current">
+      <span class="model-label">مدل</span>
+      <span class="model-name" id="currentModel">…</span>
+      <button type="button" id="modelToggle" class="btn btn-ghost btn-small">تغییر مدل</button>
+    </div>
+    <div class="model-list-body" id="modelListBody" hidden>
+      <input type="text" id="modelSearch" placeholder="جست‌وجوی مدل…" autocomplete="off">
+      <ul id="modelItems" class="model-items"></ul>
+      <div id="modelEmpty" class="hint" hidden>مدلی با این نام پیدا نشد.</div>
+      <div class="row">
+        <button type="button" id="modelRefresh" class="btn btn-ghost btn-small">به‌روزرسانی فهرست</button>
+      </div>
+      <div id="modelMsg" class="hint"></div>
+    </div>
+  </div>
+
   <div class="card update-card" id="updateBox">
     <div class="update-title">به‌روزرسانی</div>
     <div id="updateStatus">در حال بررسی به‌روزرسانی…</div>

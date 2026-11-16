@@ -36,8 +36,13 @@
   var cache = {};
   var cacheLoaded = false;
   var cacheDirty = false;
+  var lastTranslateError = null; // متن فارسی آخرین خطای ترجمه، برای پیام و پاپ‌آپ
 
   // ---------- ابزارهای کوچک ----------
+
+  function toFaDigits(n) {
+    return String(n).replace(/[0-9]/g, function (d) { return '۰۱۲۳۴۵۶۷۸۹'[+d]; });
+  }
 
   function hashText(s) {
     var h = 5381;
@@ -122,7 +127,8 @@
 
   // دسته‌ها دقیقاً به ترتیب سند ساخته می‌شوند؛ هیچ مرتب‌سازی اولویت‌داری نیست
   // تا ترجمه از بالای صفحه به پایین بیاید.
-  function buildBatches(nodes) {
+  // firstSmall: دسته اول کوچک‌تر می‌شود تا بالای صفحه زودتر دیده شود.
+  function buildBatches(nodes, firstSmall) {
     var byText = new Map();
     nodes.forEach(function (node) {
       var trimmed = node.nodeValue.trim();
@@ -138,7 +144,9 @@
     var current = [];
     var chars = 0;
     entries.forEach(function (entry) {
-      if (current.length >= MAX_ITEMS_PER_BATCH || chars + entry.text.length > MAX_CHARS_PER_BATCH) {
+      var capItems = (firstSmall && batches.length === 0) ? 8 : MAX_ITEMS_PER_BATCH;
+      var capChars = (firstSmall && batches.length === 0) ? 1500 : MAX_CHARS_PER_BATCH;
+      if (current.length >= capItems || chars + entry.text.length > capChars) {
         if (current.length) batches.push(current);
         current = [];
         chars = 0;
@@ -257,13 +265,15 @@
     return bar;
   }
 
-  function updateProgress(done, total) {
+  // درصد با وزن نویسه است، نه تعداد دسته؛ وگرنه دسته ۲۰ جمله کوتاه با دسته
+  // ۴۰۰۰ نویسه‌ای یکسان شمرده می‌شد و عدد با چیزی که روی صفحه می‌بینی نمی‌خواند.
+  function updateProgress(doneChars, totalChars, doneItems, totalItems) {
     var bar = document.getElementById('mirza-progress');
     if (!bar) return;
-    var pct = total ? Math.round((done / total) * 100) : 0;
+    var pct = totalChars ? Math.round((doneChars / totalChars) * 100) : 0;
     bar.querySelector('.mirza-progress-fill').style.width = pct + '%';
     bar.querySelector('.mirza-progress-text').textContent =
-      'در حال ترجمه… ' + done + ' از ' + total + ' بخش';
+      'در حال ترجمه… ' + toFaDigits(pct) + '٪ (' + toFaDigits(doneItems) + ' از ' + toFaDigits(totalItems) + ')';
   }
 
   function removeProgressBar() {
@@ -331,6 +341,7 @@
       cacheDirty = true;
       return out;
     }
+    if (res && res.errorText) lastTranslateError = res.errorText;
 
     // دسته خراب شد (مثلاً تعداد ترجمه‌ها نخورد)؛ هر رشته جدا ترجمه می‌شود،
     // موازی تا چیزی جا نماند و کند نشود.
@@ -380,15 +391,22 @@
       if (!slots[i]) break; // لغو شده پیش از شروع این دسته
       var results = (await slots[i]) || [];
       var appliedAny = false;
+      var appliedChars = 0;
+      var appliedItems = 0;
       batches[i].forEach(function (entry, k) {
-        if (results[k]) { applyEntry(entry, results[k]); appliedAny = true; }
+        if (results[k]) {
+          applyEntry(entry, results[k]);
+          appliedAny = true;
+          appliedChars += entry.text.length;
+          appliedItems++;
+        }
         else failed++;
       });
       if (appliedAny && !firstDone) {
         firstDone = true;
         if (onFirstApplied) onFirstApplied();
       }
-      if (onBatchDone) onBatchDone();
+      if (onBatchDone) onBatchDone(appliedChars, appliedItems);
     }
     await Promise.all(workers);
     return { failed: failed };
@@ -427,6 +445,7 @@
 
     state = 'translating';
     var myRun = ++runId;
+    lastTranslateError = null;
     await loadCache();
 
     var nodes = collectTextNodes(document.body);
@@ -437,12 +456,21 @@
       return;
     }
 
-    var textBatches = buildBatches(nodes);
+    var textBatches = buildBatches(nodes, true);
     var attrBatches = buildAttrBatches(attrs);
-    var totalBatches = textBatches.length + attrBatches.length;
-    var doneBatches = 0;
+    var totalChars = 0;
+    var totalItems = 0;
+    textBatches.concat(attrBatches).forEach(function (batch) {
+      batch.forEach(function (entry) { totalChars += entry.text.length; totalItems++; });
+    });
+    var doneChars = 0;
+    var doneItems = 0;
     var failedTotal = 0;
-    var onBatchDone = function () { doneBatches++; updateProgress(doneBatches, totalBatches); };
+    var onBatchDone = function (chars, items) {
+      doneChars += chars;
+      doneItems += items;
+      updateProgress(doneChars, totalChars, doneItems, totalItems);
+    };
     var rtlOn = false;
     var onFirstApplied = function () {
       rtlOn = true;
@@ -451,7 +479,7 @@
     };
 
     ensureProgressBar();
-    updateProgress(0, totalBatches);
+    updateProgress(0, totalChars, 0, totalItems);
 
     var r1 = await runBatches(textBatches, settings, myRun, applyTranslation, onBatchDone, onFirstApplied);
     if (myRun !== runId) return; // لغو شده بود
@@ -471,12 +499,12 @@
       startObserver(settings);
       showToast(
         failedTotal > 0
-          ? 'ترجمه تمام شد؛ ' + failedTotal + ' جمله ترجمه نشد. اتصال را بررسی کن و دوباره بزن.'
+          ? 'ترجمه تمام شد؛ ' + toFaDigits(failedTotal) + ' جمله ترجمه نشد. ' + (lastTranslateError || 'اتصال را بررسی کن و دوباره بزن.')
           : 'ترجمه تمام شد. برای برگشت به انگلیسی، دوباره روی دکمه بزن.'
       );
     } else {
       state = 'idle';
-      showToast('ترجمه نشد؛ اتصال یا کلید را در تنظیمات بررسی کن.');
+      showToast(lastTranslateError || 'ترجمه نشد؛ اتصال یا کلید را در تنظیمات بررسی کن.');
     }
   }
 
@@ -537,7 +565,7 @@
       // اسکریپت تازه را تزریق کند و جواب او برسد؛ وگرنه جواب کهنه همیشه
       // زودتر می‌رسد و جلوی تازه را می‌گیرد.
       try {
-        sendResponse({ ok: true, state: state, version: chrome.runtime.getManifest().version });
+        sendResponse({ ok: true, state: state, version: chrome.runtime.getManifest().version, error: lastTranslateError });
       } catch (_e) {
         // عمداً بدون sendResponse
       }

@@ -112,7 +112,10 @@ chrome.tabs.query({ active: true, currentWindow: true }, function (tabs) {
         }
         setTimeout(function () {
           chrome.tabs.sendMessage(tabId, { type: 'mirza-status' }, function (r) {
-            if (r && !r.error) setStatus(r.state);
+            if (r) {
+              if (r.error && r.state === 'idle') showError(r.error);
+              else setStatus(r.state);
+            }
             btn.disabled = false;
           });
         }, 600);
@@ -135,7 +138,7 @@ var pendingUpdate = null;
 function checkForUpdate() {
   chrome.runtime.sendMessage({ type: 'mirza-check-update' }, function (res) {
     if (!res || !res.ok) {
-      updateStatusEl.textContent = 'به‌روزرسانی را بررسی نکردم (' + ((res && res.error) || 'وصل نشد') + ').';
+      updateStatusEl.textContent = 'به‌روزرسانی را بررسی نکردم (' + ((res && res.errorText) || 'وصل نشد') + ').';
       return;
     }
     if (!res.updateAvailable) {
@@ -167,15 +170,95 @@ updateBtn.addEventListener('click', function () {
       } else {
         updateBtn.disabled = false;
         updateBtn.textContent = 'به‌روزرسانی به نسخه ' + pendingUpdate.latest;
-        var err = (res && res.error) || 'خطای نامشخص';
-        if (/not found|could not|native host/i.test(err)) {
-          updateStatusEl.textContent = 'میزبان به‌روزرسان نصب نیست. یک بار فایل install-host.bat را از پوشه افزونه اجرا کن، بعد دوباره بزن.';
-        } else {
-          updateStatusEl.textContent = 'به‌روزرسانی نشد: ' + err;
-        }
+        updateStatusEl.textContent = 'به‌روزرسانی نشد: ' + ((res && res.errorText) || 'خطای نامشخص');
       }
     }
   );
 });
 
 checkForUpdate();
+
+// ---------- تغییر مدل از همین‌جا ----------
+// فهرست مدل‌ها در حافظه کش می‌شود (mirza_models)؛ اگر برای همین درگاه نیست،
+// دکمه به‌روزرسانی آن را از درگاه می‌گیرد.
+var currentSettings = null;
+var cachedModels = null;
+var modelToggleBtn = document.getElementById('modelToggle');
+var modelBodyEl = document.getElementById('modelListBody');
+var modelSearchEl = document.getElementById('modelSearch');
+var modelItemsEl = document.getElementById('modelItems');
+var modelEmptyEl = document.getElementById('modelEmpty');
+var modelMsgEl = document.getElementById('modelMsg');
+var currentModelEl = document.getElementById('currentModel');
+
+function modelMsg(text) { modelMsgEl.textContent = text || ''; }
+
+function renderPopupModels() {
+  var q = (modelSearchEl.value || '').trim().toLowerCase();
+  var selected = currentSettings && currentSettings.model ? currentSettings.model : '';
+  modelItemsEl.innerHTML = '';
+  var shown = 0;
+  var list = (cachedModels && cachedModels.models) || [];
+  list.forEach(function (id) {
+    if (q && id.toLowerCase().indexOf(q) === -1) return;
+    var li = document.createElement('li');
+    li.textContent = id;
+    if (id === selected) li.classList.add('selected');
+    li.addEventListener('click', function () {
+      if (!currentSettings) return;
+      currentSettings.model = id;
+      chrome.storage.local.set({ mirza_settings: currentSettings }, function () {
+        currentModelEl.textContent = id;
+        renderPopupModels();
+        modelMsg('مدل عوض شد: ' + id);
+      });
+    });
+    modelItemsEl.appendChild(li);
+    shown++;
+  });
+  modelEmptyEl.hidden = shown > 0 || !list.length;
+}
+
+function loadModelSection() {
+  chrome.storage.local.get(['mirza_settings', 'mirza_models'], function (r) {
+    currentSettings = r.mirza_settings || null;
+    currentModelEl.textContent = (currentSettings && currentSettings.model) || 'تنظیم نشده';
+    cachedModels = r.mirza_models || null;
+    if (cachedModels && cachedModels.provider === (currentSettings && currentSettings.provider)) {
+      renderPopupModels();
+    } else {
+      modelMsg('فهرست مدل‌ها برای این درگاه نیست؛ «به‌روزرسانی فهرست» را بزن.');
+    }
+  });
+}
+
+modelToggleBtn.addEventListener('click', function () {
+  var open = modelBodyEl.hidden;
+  modelBodyEl.hidden = !open;
+  modelToggleBtn.textContent = open ? 'پنهان کردن' : 'تغییر مدل';
+  if (open) modelSearchEl.focus();
+});
+
+modelSearchEl.addEventListener('input', renderPopupModels);
+
+document.getElementById('modelRefresh').addEventListener('click', function () {
+  if (!currentSettings || !currentSettings.baseUrl) {
+    modelMsg('اول در تنظیمات آدرس و کلید را کامل کن.');
+    return;
+  }
+  modelMsg('در حال گرفتن فهرست مدل‌ها…');
+  chrome.runtime.sendMessage(
+    { type: 'mirza-fetch-models', baseUrl: currentSettings.baseUrl, apiKey: currentSettings.apiKey, provider: currentSettings.provider },
+    function (res) {
+      if (!res || !res.ok) {
+        modelMsg('فهرست را نگرفتم: ' + ((res && res.errorText) || 'وصل نشد'));
+        return;
+      }
+      cachedModels = { provider: currentSettings.provider, models: res.models };
+      renderPopupModels();
+      modelMsg(res.models.length + ' مدل گرفتم.');
+    }
+  );
+});
+
+loadModelSection();

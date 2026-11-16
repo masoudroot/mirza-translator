@@ -31,12 +31,23 @@
       <button type="button" id="toggleKeyBtn" class="btn btn-ghost btn-small">نمایش</button>
     </div>
     <div class="hint">کلید فقط در حافظه همین مرورگر ذخیره می‌شود و فقط به همین آدرس فرستاده می‌شود.</div>
+    <div class="hint">افزونه از پروکسی خود کروم استفاده می‌کند؛ اگر v2rayNG داری، حالت سراسری (Global) را روشن کن تا درخواست‌ها از همان پروکسی بروند.</div>
 
     <label for="modelInput">مدل</label>
-    <input type="text" id="modelInput" list="modelList" placeholder="اول دکمه «گرفتن مدل‌ها» را بزن" autocomplete="off">
-    <datalist id="modelList"></datalist>
+    <input type="text" id="modelInput" placeholder="اول دکمه «گرفتن مدل‌ها» را بزن" autocomplete="off">
     <div class="row">
       <button type="button" id="fetchBtn" class="btn btn-ghost">گرفتن مدل‌ها</button>
+    </div>
+    <div class="model-list" id="modelListBox" hidden>
+      <button type="button" id="modelListToggle" class="model-list-toggle">
+        <span>فهرست مدل‌ها <span id="modelCount"></span></span>
+        <span class="chev">▾</span>
+      </button>
+      <div class="model-list-body" id="modelListBody" hidden>
+        <input type="text" id="modelSearch" placeholder="جست‌وجوی مدل…" autocomplete="off">
+        <ul id="modelItems" class="model-items"></ul>
+        <div id="modelEmpty" class="hint" hidden>مدلی با این نام پیدا نشد.</div>
+      </div>
     </div>
     <div class="hint">اگر درگاهت فهرست مدل نداد، نام مدل را دستی در همین کادر بنویس.</div>
 

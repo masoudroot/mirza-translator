@@ -40,7 +40,13 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     return true;
   }
   if (msg.type === 'mirza-fetch-models') {
-    fetchModels(msg.baseUrl, msg.apiKey).then(sendResponse);
+    fetchModels(msg.baseUrl, msg.apiKey, msg.provider).then(sendResponse);
+    return true;
+  }
+  if (msg.type === 'mirza-get-models') {
+    chrome.storage.local.get('mirza_models', (r) => {
+      sendResponse(r.mirza_models || null);
+    });
     return true;
   }
   if (msg.type === 'mirza-open-options') {
@@ -58,6 +64,58 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
 
 function cleanBaseUrl(url) {
   return String(url || '').trim().replace(/\/+$/, '');
+}
+
+// ---------- پیام خطای شفاف ----------
+// هر خطا یک کد ماشینی و یک متن فارسی روشن دارد تا کاربر بداند دقیقاً چه شد
+// و چه کار کند. خطای شبکه معمولاً یعنی اینترنت یا پروکسی؛ افزونه از پروکسی
+// خود کروم استفاده می‌کند، پس اگر v2rayNG داری باید در حالت سراسری (Global) باشد.
+function describeError(code, status, detail) {
+  switch (code) {
+    case 'network':
+      return 'به درگاه وصل نشد. اگر پروکسی (v2rayNG) داری، مطمئن شو روشن است و در حالت سراسری (Global)؛ اگر تازه روشنش کردی، یک بار صفحه را تازه کن.';
+    case 'timeout':
+      return 'درگاه در ۳۰ ثانیه جواب نداد. دوباره بزن؛ اگر ادامه داشت، مدل دیگری را امتحان کن.';
+    case 'unauthorized':
+      return 'کلید API درست نیست؛ کلید را در تنظیمات بررسی کن.';
+    case 'forbidden':
+      return 'درگاه اجازه نداد (403)؛ شاید این کلید به این مدل دسترسی ندارد.';
+    case 'not_found':
+      return 'مدل یا آدرس پیدا نشد (404)؛ آدرس پایه و نام مدل را بررسی کن.';
+    case 'rate_limited':
+      return 'درگاه شلوغ است (429)؛ چند ثانیه صبر کن و دوباره بزن.';
+    case 'bad_request':
+      return 'درگاه درخواست را قبول نکرد (400)؛ مدل دیگری را امتحان کن.';
+    case 'bad_response':
+      return 'مدل جواب درست و کامل نداد؛ دوباره بزن.';
+    case 'no_api_key':
+      return 'کلید API را در تنظیمات بگذار.';
+    case 'no_settings':
+      return 'تنظیمات ناقص است؛ آدرس پایه و مدل را کامل کن.';
+    case 'no_base_url':
+      return 'آدرس پایه را بنویس.';
+    case 'update_host':
+      return 'میزبان به‌روزرسان نصب نیست. یک بار فایل install-host.bat را از پوشه افزونه اجرا کن، بعد دوباره بزن.';
+    case 'bad_version_file':
+      return 'فایل نسخه تازه خراب است؛ بعداً دوباره بزن.';
+    case 'no_update_info':
+      return 'اطلاعات به‌روزرسانی ناقص است؛ دوباره بررسی کن.';
+    default:
+      return (detail ? 'خطا: ' + detail : 'خطای نامشخص؛ دوباره بزن.') + (status ? ' (HTTP ' + status + ')' : '');
+  }
+}
+
+function httpCode(status) {
+  if (status === 401) return 'unauthorized';
+  if (status === 403) return 'forbidden';
+  if (status === 404) return 'not_found';
+  if (status === 429) return 'rate_limited';
+  if (status === 400) return 'bad_request';
+  return 'http_error';
+}
+
+function failResult(code, status, detail) {
+  return { ok: false, error: code, errorText: describeError(code, status, detail), status: status || 0 };
 }
 
 async function postChat(settings, messages, useJsonMode) {
@@ -84,14 +142,15 @@ async function postChat(settings, messages, useJsonMode) {
     const data = await res.json().catch(() => ({}));
     if (!res.ok) {
       const detail = (data && data.error && data.error.message) || ('HTTP ' + res.status);
-      return { ok: false, error: detail, status: res.status };
+      return failResult(httpCode(res.status), res.status, detail);
     }
     const content = data && data.choices && data.choices[0] && data.choices[0].message
       ? data.choices[0].message.content
       : '';
     return { ok: true, content: String(content || '') };
   } catch (err) {
-    return { ok: false, error: err && err.name === 'AbortError' ? 'timeout' : String(err && err.message || err) };
+    if (err && err.name === 'AbortError') return failResult('timeout');
+    return failResult('network', 0, String(err && err.message || err));
   } finally {
     clearTimeout(timer);
   }
@@ -120,10 +179,10 @@ function parseTranslations(content, expectedCount) {
 
 async function translateBatch(texts, settings) {
   if (!settings || !settings.apiKey) {
-    return { ok: false, error: 'no_api_key' };
+    return failResult('no_api_key');
   }
   if (!settings.baseUrl || !settings.model) {
-    return { ok: false, error: 'no_settings' };
+    return failResult('no_settings');
   }
   const messages = [
     { role: 'system', content: SYSTEM_PROMPT },
@@ -135,7 +194,7 @@ async function translateBatch(texts, settings) {
   if (!res.ok && res.status === 400) {
     res = await postChat(settings, messages, false);
   }
-  if (!res.ok) return { ok: false, error: res.error || 'request_failed' };
+  if (!res.ok) return res;
 
   let translations = parseTranslations(res.content, texts.length);
   if (!translations) {
@@ -149,13 +208,13 @@ async function translateBatch(texts, settings) {
     ], true);
     if (repair.ok) translations = parseTranslations(repair.content, texts.length);
   }
-  if (!translations) return { ok: false, error: 'bad_response' };
+  if (!translations) return failResult('bad_response');
   return { ok: true, translations };
 }
 
-async function fetchModels(baseUrl, apiKey) {
+async function fetchModels(baseUrl, apiKey, provider) {
   const base = cleanBaseUrl(baseUrl);
-  if (!base) return { ok: false, error: 'no_base_url' };
+  if (!base) return failResult('no_base_url');
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), 20000);
   try {
@@ -170,15 +229,20 @@ async function fetchModels(baseUrl, apiKey) {
     const data = await res.json().catch(() => ({}));
     if (!res.ok) {
       const detail = (data && data.error && data.error.message) || ('HTTP ' + res.status);
-      return { ok: false, error: detail, status: res.status };
+      return failResult(httpCode(res.status), res.status, detail);
     }
     const list = (data && Array.isArray(data.data) ? data.data : [])
       .map((m) => m && m.id)
       .filter(Boolean)
       .sort();
+    // فهرست کش می‌شود تا پاپ‌آپ هم بدون رفتن به تنظیمات آن را نشان بدهد
+    try {
+      chrome.storage.local.set({ mirza_models: { provider: provider || '', baseUrl: base, models: list, fetchedAt: Date.now() } });
+    } catch (_e) {}
     return { ok: true, models: list };
   } catch (err) {
-    return { ok: false, error: err && err.name === 'AbortError' ? 'timeout' : String(err && err.message || err) };
+    if (err && err.name === 'AbortError') return failResult('timeout');
+    return failResult('network', 0, String(err && err.message || err));
   } finally {
     clearTimeout(timer);
   }
@@ -208,10 +272,10 @@ async function checkUpdate() {
   const timer = setTimeout(() => ctrl.abort(), 20000);
   try {
     const res = await fetch(UPDATE_BASE + '/version.json?t=' + Date.now(), { signal: ctrl.signal });
-    if (!res.ok) return { ok: false, error: 'HTTP ' + res.status, current };
+    if (!res.ok) return Object.assign(failResult(httpCode(res.status), res.status), { current });
     const data = await res.json();
     if (!data || !data.version || !Array.isArray(data.files)) {
-      return { ok: false, error: 'bad_version_file', current };
+      return Object.assign(failResult('bad_version_file'), { current });
     }
     return {
       ok: true,
@@ -222,7 +286,8 @@ async function checkUpdate() {
       updateAvailable: compareVersions(data.version, current) > 0
     };
   } catch (err) {
-    return { ok: false, error: err && err.name === 'AbortError' ? 'timeout' : String(err && err.message || err), current };
+    const f = err && err.name === 'AbortError' ? failResult('timeout') : failResult('network', 0, String(err && err.message || err));
+    return Object.assign(f, { current });
   } finally {
     clearTimeout(timer);
   }
@@ -233,19 +298,19 @@ function sendNative(msg) {
     try {
       chrome.runtime.sendNativeMessage('com.mirza.translator', msg, (res) => {
         if (chrome.runtime.lastError) {
-          return resolve({ ok: false, error: chrome.runtime.lastError.message || 'native_host_error' });
+          return resolve(failResult('update_host', 0, chrome.runtime.lastError.message || ''));
         }
-        resolve(res || { ok: false, error: 'no_response' });
+        resolve(res || failResult('update_host'));
       });
     } catch (e) {
-      resolve({ ok: false, error: String(e && e.message || e) });
+      resolve(failResult('update_host', 0, String(e && e.message || e)));
     }
   });
 }
 
 async function doUpdate(base, files) {
   if (!base || !Array.isArray(files) || !files.length) {
-    return { ok: false, error: 'no_update_info' };
+    return failResult('no_update_info');
   }
   return sendNative({ action: 'update', base, files });
 }
@@ -255,7 +320,7 @@ async function pingHost() {
 }
 
 async function testConnection(settings) {
-  if (!settings || !settings.apiKey) return { ok: false, error: 'no_api_key' };
+  if (!settings || !settings.apiKey) return failResult('no_api_key');
   const res = await postChat(
     settings,
     [
@@ -264,6 +329,6 @@ async function testConnection(settings) {
     ],
     false
   );
-  if (!res.ok) return { ok: false, error: res.error || 'request_failed' };
+  if (!res.ok) return res;
   return { ok: true, reply: res.content.trim().slice(0, 80) };
 }

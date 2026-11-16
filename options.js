@@ -15,12 +15,21 @@ var PROVIDER_HINTS = {
 var baseUrlEl = document.getElementById('baseUrl');
 var apiKeyEl = document.getElementById('apiKey');
 var modelEl = document.getElementById('modelInput');
-var modelListEl = document.getElementById('modelList');
 var fetchBtn = document.getElementById('fetchBtn');
 var saveBtn = document.getElementById('saveBtn');
 var testBtn = document.getElementById('testBtn');
 var messageEl = document.getElementById('message');
 var presetBtns = Array.prototype.slice.call(document.querySelectorAll('.preset'));
+
+// فهرست مدل‌ها: جمع‌شونده، با سرچ؛ خودش باز نمی‌شود.
+var modelListBoxEl = document.getElementById('modelListBox');
+var modelListToggleEl = document.getElementById('modelListToggle');
+var modelListBodyEl = document.getElementById('modelListBody');
+var modelSearchEl = document.getElementById('modelSearch');
+var modelItemsEl = document.getElementById('modelItems');
+var modelEmptyEl = document.getElementById('modelEmpty');
+var modelCountEl = document.getElementById('modelCount');
+var fetchedModels = [];
 
 var currentProvider = 'dotdotagent';
 
@@ -62,7 +71,46 @@ function loadSettings() {
     var s = r.mirza_settings;
     if (s && s.baseUrl && s.apiKey) fetchModels(true);
   });
+  // فهرست کش‌شده را همان اول نشان بده؛ گرفتن تازه در پس‌زمینه می‌آید
+  chrome.storage.local.get('mirza_models', function (r) {
+    if (r.mirza_models && Array.isArray(r.mirza_models.models)) {
+      fetchedModels = r.mirza_models.models;
+      renderModelList();
+    }
+  });
 }
+
+function renderModelList() {
+  var q = (modelSearchEl.value || '').trim().toLowerCase();
+  var selected = modelEl.value.trim();
+  modelItemsEl.innerHTML = '';
+  var shown = 0;
+  fetchedModels.forEach(function (id) {
+    if (q && id.toLowerCase().indexOf(q) === -1) return;
+    var li = document.createElement('li');
+    li.textContent = id;
+    if (id === selected) li.classList.add('selected');
+    li.addEventListener('click', function () {
+      modelEl.value = id;
+      renderModelList();
+      showMessage('مدل «' + id + '» انتخاب شد؛ ذخیره بزن تا ثبت شود.', true);
+    });
+    modelItemsEl.appendChild(li);
+    shown++;
+  });
+  modelEmptyEl.hidden = shown > 0;
+  modelCountEl.textContent = fetchedModels.length ? '(' + fetchedModels.length + ' مدل)' : '';
+  modelListBoxEl.hidden = fetchedModels.length === 0;
+}
+
+modelListToggleEl.addEventListener('click', function () {
+  var open = modelListBodyEl.hidden;
+  modelListBodyEl.hidden = !open;
+  modelListToggleEl.classList.toggle('open', open);
+  if (open) modelSearchEl.focus();
+});
+
+modelSearchEl.addEventListener('input', renderModelList);
 
 presetBtns.forEach(function (b) {
   b.addEventListener('click', function () {
@@ -84,28 +132,24 @@ function fetchModels(quiet) {
   fetchBtn.disabled = true;
   fetchBtn.textContent = 'در حال گرفتن…';
   chrome.runtime.sendMessage(
-    { type: 'mirza-fetch-models', baseUrl: baseUrl, apiKey: apiKey },
+    { type: 'mirza-fetch-models', baseUrl: baseUrl, apiKey: apiKey, provider: currentProvider },
     function (res) {
       fetchBtn.disabled = false;
       fetchBtn.textContent = 'گرفتن مدل‌ها';
       if (!res || !res.ok) {
-        var err = (res && res.error) || 'وصل نشد';
-        if (!quiet) showMessage('مدل‌ها را نگرفتم: ' + err + ' — نام مدل را دستی بنویس.', false);
+        if (!quiet) showMessage('مدل‌ها را نگرفتم: ' + ((res && res.errorText) || 'وصل نشد') + ' — نام مدل را دستی بنویس.', false);
         return;
       }
-      modelListEl.innerHTML = '';
-      res.models.forEach(function (id) {
-        var opt = document.createElement('option');
-        opt.value = id;
-        modelListEl.appendChild(opt);
-      });
+      fetchedModels = res.models;
+      renderModelList();
       var saved = modelEl.value.trim();
       if (saved && res.models.indexOf(saved) === -1) {
         // مدل ذخیره‌شده در فهرست نیست؛ سر جایش می‌ماند، فقط خبر می‌دهیم
         if (!quiet) showMessage(res.models.length + ' مدل گرفتم؛ ولی مدل ذخیره‌شده در فهرست نبود و سر جایش ماند.', true);
       } else {
         if (!modelEl.value.trim() && res.models.length) modelEl.value = res.models[0];
-        if (!quiet) showMessage(res.models.length + ' مدل گرفتم؛ یکی را انتخاب کن و ذخیره بزن.', true);
+        renderModelList();
+        if (!quiet) showMessage(res.models.length + ' مدل گرفتم؛ فهرست را باز کن و یکی را انتخاب کن.', true);
       }
     }
   );
@@ -147,7 +191,7 @@ testBtn.addEventListener('click', function () {
     if (res && res.ok) {
       showMessage('وصل شد. جواب مدل: ' + res.reply, true);
     } else {
-      showMessage('وصل نشد: ' + ((res && res.error) || 'خطای نامشخص'), false);
+      showMessage('وصل نشد: ' + ((res && res.errorText) || 'خطای نامشخص'), false);
     }
   });
 });
