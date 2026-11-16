@@ -21,8 +21,12 @@
 
   var ATTR_NAMES = ['alt', 'title', 'placeholder'];
 
-  var MAX_ITEMS_PER_BATCH = 20;
-  var MAX_CHARS_PER_BATCH = 4000;
+  // پنج کارگر موازی، ولی هر کارگر در هر لحظه فقط یک درخواست دارد
+  // (نصف کردن و تک‌تک پشت سر هم‌اند) تا سقف درخواست هم‌زمان درگاه
+  // (۱۰ در ثانیه و سقف هم‌زمان) رد نشود. دسته کوچک‌تر هم جواب مدل را
+  // کوتاه‌تر و سالم‌تر می‌کند (دسته ۲۰تایی گاهی JSON خراب برمی‌گرداند).
+  var MAX_ITEMS_PER_BATCH = 12;
+  var MAX_CHARS_PER_BATCH = 2500;
   var PARALLEL_WORKERS = 5;
   var MIN_TEXT_LENGTH = 2;
 
@@ -37,6 +41,7 @@
   var cacheLoaded = false;
   var cacheDirty = false;
   var lastTranslateError = null; // متن فارسی آخرین خطای ترجمه، برای پیام و پاپ‌آپ
+  var fatalError = null; // خطای کشنده (مدل خاموش، کلید اشتباه)؛ کل ترجمه همان‌جا می‌ایستد
 
   // ---------- ابزارهای کوچک ----------
 
@@ -293,6 +298,10 @@
 
   // ---------- حرف زدن با پس‌زمینه ----------
 
+  function sleep(ms) {
+    return new Promise(function (resolve) { setTimeout(resolve, ms); });
+  }
+
   function translateBatchViaBackground(texts, settings) {
     return new Promise(function (resolve) {
       try {
@@ -318,9 +327,12 @@
     });
   }
 
-  // ترجمه چند رشته با کش، یک بار تلاش دوباره، و بازگشت تک‌تک اگر دسته خراب شد.
+  // ترجمه چند رشته با کش و یک بار تلاش دوباره.
+  // اگر دسته خراب شد، یک بار نصف می‌شود تا رشته خراب جدا بیفتد؛ اگر نیمه‌ای
+  // هم خراب شد، همان نیمه تک‌تک می‌رود. خطای کشنده (مدل خاموش، کلید
+  // اشتباه) همان‌جا کل ترجمه را می‌ایستاند تا درخواست بیهوده نرود.
   // خروجی آرایه‌ای هم‌طول ورودی است؛ جای رشته‌های ناموفق null می‌ماند.
-  async function translateTexts(texts, settings) {
+  async function translateTexts(texts, settings, depth) {
     var out = new Array(texts.length).fill(null);
     var missing = [];
     var missingIdx = [];
@@ -332,7 +344,10 @@
     if (!missing.length) return out;
 
     var res = await translateBatchViaBackground(missing, settings);
-    if (!res.ok) res = await translateBatchViaBackground(missing, settings);
+    if (!res.ok && !res.fatal && !depth) {
+      if (res.error === 'rate_limited') await sleep(5000);
+      res = await translateBatchViaBackground(missing, settings);
+    }
     if (res.ok && res.translations) {
       missing.forEach(function (t, k) {
         cache[hashText(t)] = res.translations[k];
@@ -341,27 +356,48 @@
       cacheDirty = true;
       return out;
     }
+    if (res && res.fatal) {
+      fatalError = res.errorText || 'مدل در دسترس نیست.';
+      return out;
+    }
     if (res && res.errorText) lastTranslateError = res.errorText;
+    // درگاه شلوغ است (429): نصف کردن و تک‌تک فقط بار را بیشتر می‌کند؛
+    // همین دسته را برای تلاش بعدی می‌گذاریم و برمی‌گردیم.
+    if (res && res.error === 'rate_limited') return out;
+    if (missing.length === 1) return out;
 
-    // دسته خراب شد (مثلاً تعداد ترجمه‌ها نخورد)؛ هر رشته جدا ترجمه می‌شود،
-    // موازی تا چیزی جا نماند و کند نشود.
+    if (!depth) {
+      // دسته خراب شد (مثلاً تعداد ترجمه‌ها نخورد)؛ یک بار نصف می‌کنیم تا
+      // رشته خراب جدا بیفتد. دو نیمه پشت سر هم می‌روند تا هم‌زمان شلوغ نشود.
+      var mid = Math.ceil(missing.length / 2);
+      var left = await translateTexts(missing.slice(0, mid), settings, 1);
+      var right = await translateTexts(missing.slice(mid), settings, 1);
+      left.forEach(function (tr, k) { if (tr) out[missingIdx[k]] = tr; });
+      right.forEach(function (tr, k) { if (tr) out[missingIdx[mid + k]] = tr; });
+      return out;
+    }
+
+    // نیمه هم خراب شد؛ هر رشته جدا ترجمه می‌شود، پشت سر هم تا درگاه شلوغ نشود.
     var singleResults = new Array(missing.length).fill(null);
     var si = 0;
     async function singleWorker() {
-      while (si < missing.length) {
+      while (si < missing.length && !fatalError) {
         var k = si++;
         var one = await translateBatchViaBackground([missing[k]], settings);
         if (one.ok && one.translations && one.translations[0]) {
           cache[hashText(missing[k])] = one.translations[0];
           singleResults[k] = one.translations[0];
           cacheDirty = true;
+        } else if (one && one.fatal) {
+          fatalError = one.errorText || 'مدل در دسترس نیست.';
+        } else if (one && one.error === 'rate_limited') {
+          // درگاه شلوغ شد؛ بقیه تک‌ها را نمی‌زنیم تا آرام شود.
+          si = missing.length;
+          if (one.errorText) lastTranslateError = one.errorText;
         }
       }
     }
-    var singleWorkers = [];
-    var n = Math.min(PARALLEL_WORKERS, missing.length);
-    for (var s = 0; s < n; s++) singleWorkers.push(singleWorker());
-    await Promise.all(singleWorkers);
+    await singleWorker();
     missing.forEach(function (t, k) {
       if (singleResults[k]) out[missingIdx[k]] = singleResults[k];
     });
@@ -378,7 +414,7 @@
     var workers = [];
     for (var w = 0; w < PARALLEL_WORKERS; w++) {
       workers.push((async function worker() {
-        while (myRun === runId) {
+        while (myRun === runId && !fatalError) {
           var idx = next++;
           if (idx >= batches.length) break;
           slots[idx] = translateTexts(batches[idx].map(function (e) { return e.text; }), settings);
@@ -388,6 +424,7 @@
     }
     for (var i = 0; i < batches.length; i++) {
       if (myRun !== runId) break;
+      if (fatalError) break; // خطای کشنده: بقیه دسته‌ها بیهوده‌اند
       if (!slots[i]) break; // لغو شده پیش از شروع این دسته
       var results = (await slots[i]) || [];
       var appliedAny = false;
@@ -446,6 +483,7 @@
     state = 'translating';
     var myRun = ++runId;
     lastTranslateError = null;
+    fatalError = null;
     await loadCache();
 
     var nodes = collectTextNodes(document.body);
@@ -475,7 +513,6 @@
     var onFirstApplied = function () {
       rtlOn = true;
       enableRtl();
-      translateTitle(settings, myRun);
     };
 
     ensureProgressBar();
@@ -485,16 +522,28 @@
     if (myRun !== runId) return; // لغو شده بود
     failedTotal += r1.failed;
 
-    var r2 = await runBatches(attrBatches, settings, myRun, applyAttrTranslation, onBatchDone, null);
-    if (myRun !== runId) return;
-    failedTotal += r2.failed;
+    var r2 = { failed: 0 };
+    if (!fatalError) {
+      r2 = await runBatches(attrBatches, settings, myRun, applyAttrTranslation, onBatchDone, null);
+      if (myRun !== runId) return;
+      failedTotal += r2.failed;
+    }
 
-    // صفحه‌ای که فقط ویژگی متنی دارد و متن ندارد: راست‌چین و عنوان این‌جا می‌آید
+    // صفحه‌ای که فقط ویژگی متنی دارد و متن ندارد: راست‌چین این‌جا می‌آید
     if (!rtlOn && (translatedNodes.length || translatedAttrs.length)) onFirstApplied();
+
+    // عنوان صفحه آخر ترجمه می‌شود تا هم‌زمان با دسته‌ها درخواست اضافه نرود؛
+    // و فقط وقتی چیزی ترجمه شده باشد.
+    if (!fatalError && (translatedNodes.length || translatedAttrs.length)) translateTitle(settings, myRun);
 
     saveCache();
     removeProgressBar();
-    if (translatedNodes.length || translatedAttrs.length) {
+    if (fatalError) {
+      // خطای کشنده: یا هیچ‌چیز ترجمه نشده، یا وسط کار متوقف شده؛ پیامش خودش راهنماست.
+      state = (translatedNodes.length || translatedAttrs.length) ? 'translated' : 'idle';
+      if (state === 'translated') startObserver(settings);
+      showToast(fatalError);
+    } else if (translatedNodes.length || translatedAttrs.length) {
       state = 'translated';
       startObserver(settings);
       showToast(
@@ -565,7 +614,7 @@
       // اسکریپت تازه را تزریق کند و جواب او برسد؛ وگرنه جواب کهنه همیشه
       // زودتر می‌رسد و جلوی تازه را می‌گیرد.
       try {
-        sendResponse({ ok: true, state: state, version: chrome.runtime.getManifest().version, error: lastTranslateError });
+        sendResponse({ ok: true, state: state, version: chrome.runtime.getManifest().version, error: fatalError || lastTranslateError });
       } catch (_e) {
         // عمداً بدون sendResponse
       }

@@ -226,6 +226,9 @@ function loadModelSection() {
     cachedModels = r.mirza_models || null;
     if (cachedModels && cachedModels.provider === (currentSettings && currentSettings.provider)) {
       renderPopupModels();
+      if (currentSettings && currentSettings.model && cachedModels.models.indexOf(currentSettings.model) === -1) {
+        modelMsg('این مدل در فهرست درگاه نیست؛ شاید در دسترس نباشد. «به‌روزرسانی فهرست» را بزن و یکی دیگر را انتخاب کن.');
+      }
     } else {
       modelMsg('فهرست مدل‌ها برای این درگاه نیست؛ «به‌روزرسانی فهرست» را بزن.');
     }

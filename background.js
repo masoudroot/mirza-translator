@@ -75,7 +75,7 @@ function describeError(code, status, detail) {
     case 'network':
       return 'به درگاه وصل نشد. اگر پروکسی (v2rayNG) داری، مطمئن شو روشن است و در حالت سراسری (Global)؛ اگر تازه روشنش کردی، یک بار صفحه را تازه کن.';
     case 'timeout':
-      return 'درگاه در ۳۰ ثانیه جواب نداد. دوباره بزن؛ اگر ادامه داشت، مدل دیگری را امتحان کن.';
+      return 'درگاه در ۶۰ ثانیه جواب نداد. دوباره بزن؛ اگر ادامه داشت، مدل دیگری را امتحان کن.';
     case 'unauthorized':
       return 'کلید API درست نیست؛ کلید را در تنظیمات بررسی کن.';
     case 'forbidden':
@@ -86,6 +86,8 @@ function describeError(code, status, detail) {
       return 'درگاه شلوغ است (429)؛ چند ثانیه صبر کن و دوباره بزن.';
     case 'bad_request':
       return 'درگاه درخواست را قبول نکرد (400)؛ مدل دیگری را امتحان کن.';
+    case 'model_unavailable':
+      return 'مدل «' + (detail || '') + '» الان در این درگاه در دسترس نیست؛ از فهرست مدل‌ها یکی دیگر را انتخاب کن.';
     case 'bad_response':
       return 'مدل جواب درست و کامل نداد؛ دوباره بزن.';
     case 'no_api_key':
@@ -114,45 +116,74 @@ function httpCode(status) {
   return 'http_error';
 }
 
+// خطای کشنده: با این خطا هیچ دسته‌ای درست نمی‌شود؛ کل ترجمه همان‌جا می‌ایستد.
+var FATAL_ERRORS = { model_unavailable: true, unauthorized: true, not_found: true };
+
 function failResult(code, status, detail) {
-  return { ok: false, error: code, errorText: describeError(code, status, detail), status: status || 0 };
+  return { ok: false, error: code, errorText: describeError(code, status, detail), status: status || 0, fatal: !!FATAL_ERRORS[code] };
 }
 
-async function postChat(settings, messages, useJsonMode) {
+function sleepMs(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function postChat(settings, messages, useJsonMode, plain) {
   const base = cleanBaseUrl(settings.baseUrl);
   const body = {
     model: settings.model,
     messages,
     temperature: 0.3
   };
+  // مدل‌های فکرکننده (مثل deepseek) بی‌این دو، همه توکن‌ها را صرف فکر
+  // می‌کنند و جواب خالی برمی‌گردانند (finish_reason: length). تلاش کم برای
+  // فکر + جای کافی برای جواب، بیشتر دسته‌ها را همان بار اول سالم می‌کند.
+  // plain یعنی بدون این دو و بدون حالت JSON، برای درگاهی که آن‌ها را نمی‌پذیرد.
+  if (!plain) {
+    body.max_tokens = 8192;
+    body.reasoning_effort = 'low';
+  }
   if (useJsonMode) body.response_format = { type: 'json_object' };
 
-  const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), 30000);
-  try {
-    const res = await fetch(base + '/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: 'Bearer ' + settings.apiKey
-      },
-      body: JSON.stringify(body),
-      signal: ctrl.signal
-    });
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) {
-      const detail = (data && data.error && data.error.message) || ('HTTP ' + res.status);
-      return failResult(httpCode(res.status), res.status, detail);
+  // درگاه شلوغ (429) موقتی است؛ همان درخواست را با فاصله دوباره می‌زنیم.
+  // فاصله‌ها تصادفی‌اند تا تلاش‌های هم‌زمان روی هم نیفتند و طوفان نسازند.
+  // پیام بالادستی می‌گوید «چند ثانیه صبر کن»، پس فاصله‌ها چند ثانیه‌ای‌اند.
+  // بدون این صبر، تلاش دوباره و نصف کردن فقط بار درگاه را بیشتر می‌کند.
+  const retryDelays = [3000, 8000];
+  for (let attempt = 0; ; attempt++) {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 60000);
+    try {
+      const res = await fetch(base + '/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: 'Bearer ' + settings.apiKey
+        },
+        body: JSON.stringify(body),
+        signal: ctrl.signal
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.status === 429 && attempt < retryDelays.length) {
+        await sleepMs(retryDelays[attempt] * (0.5 + Math.random()));
+        continue;
+      }
+      if (!res.ok) {
+        const detail = (data && data.error && data.error.message) || ('HTTP ' + res.status);
+        if (res.status === 400 && /unavailable|not found|does not exist|doesn't exist|no such model|недоступн/i.test(detail)) {
+          return failResult('model_unavailable', res.status, settings.model || '');
+        }
+        return failResult(httpCode(res.status), res.status, detail);
+      }
+      const content = data && data.choices && data.choices[0] && data.choices[0].message
+        ? data.choices[0].message.content
+        : '';
+      return { ok: true, content: String(content || '') };
+    } catch (err) {
+      if (err && err.name === 'AbortError') return failResult('timeout');
+      return failResult('network', 0, String(err && err.message || err));
+    } finally {
+      clearTimeout(timer);
     }
-    const content = data && data.choices && data.choices[0] && data.choices[0].message
-      ? data.choices[0].message.content
-      : '';
-    return { ok: true, content: String(content || '') };
-  } catch (err) {
-    if (err && err.name === 'AbortError') return failResult('timeout');
-    return failResult('network', 0, String(err && err.message || err));
-  } finally {
-    clearTimeout(timer);
   }
 }
 
@@ -189,10 +220,11 @@ async function translateBatch(texts, settings) {
     { role: 'user', content: JSON.stringify({ texts }) }
   ];
 
-  // تلاش اول با حالت JSON؛ اگر درگاه قبول نکرد، بدون آن دوباره می‌زنیم.
+  // تلاش اول با حالت JSON؛ اگر درگاه قبول نکرد، ساده و بدون پارامتر اضافه دوباره می‌زنیم.
+  // اگر خطا «مدل در دسترس نیست» بود، تلاش دوباره بیهوده است.
   let res = await postChat(settings, messages, true);
-  if (!res.ok && res.status === 400) {
-    res = await postChat(settings, messages, false);
+  if (!res.ok && res.status === 400 && res.error !== 'model_unavailable') {
+    res = await postChat(settings, messages, false, true);
   }
   if (!res.ok) return res;
 
@@ -321,14 +353,12 @@ async function pingHost() {
 
 async function testConnection(settings) {
   if (!settings || !settings.apiKey) return failResult('no_api_key');
-  const res = await postChat(
-    settings,
-    [
-      { role: 'system', content: 'Reply with exactly this Persian word: سلام' },
-      { role: 'user', content: 'Hello' }
-    ],
-    false
-  );
+  const messages = [
+    { role: 'system', content: 'Reply with exactly this Persian word: سلام' },
+    { role: 'user', content: 'Hello' }
+  ];
+  let res = await postChat(settings, messages, false);
+  if (!res.ok && res.status === 400) res = await postChat(settings, messages, false, true);
   if (!res.ok) return res;
   return { ok: true, reply: res.content.trim().slice(0, 80) };
 }
